@@ -1,0 +1,1584 @@
+import os
+import MetaTrader5 as mt5
+import pandas as pd
+import mplfinance as mpf
+from datetime import datetime
+import pytz
+import json
+from PIL import Image
+import numpy as np
+import matplotlib.pyplot as plt
+import cv2
+
+# Brokers configuration
+brokersdictionary = {
+    "deriv": {
+        "TERMINAL_PATH": r"c:\xampp\htdocs\CIPHER\metaTrader5\cipher i\MetaTrader 5 deriv\terminal64.exe",
+        "LOGIN_ID": "101347351",
+        "PASSWORD": "@Techknowdge12#",
+        "SERVER": "DerivSVG-Server-02",
+        "ACCOUNT": "demo",
+        "STRATEGY": "allorder",
+        "BASE_FOLDER": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\deriv\derivsymbols"
+    },
+    "deriv1": {
+        "TERMINAL_PATH": r"c:\xampp\htdocs\CIPHER\metaTrader5\cipher i\MetaTrader 5 deriv 1\terminal64.exe",
+        "LOGIN_ID": "140357859",
+        "PASSWORD": "@Ayomide12#",
+        "SERVER": "DerivSVG-Server-03",
+        "ACCOUNT": "real",
+        "STRATEGY": "lowtohigh",
+        "BASE_FOLDER": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\deriv 1\derivsymbols"
+    },
+    "deriv2": {
+        "TERMINAL_PATH": r"c:\xampp\htdocs\CIPHER\metaTrader5\cipher i\MetaTrader 5 deriv 1\terminal64.exe",
+        "LOGIN_ID": "140357853",
+        "PASSWORD": "@Ayomide12#",
+        "SERVER": "DerivSVG-Server-03",
+        "ACCOUNT": "real",
+        "STRATEGY": "hightolow",
+        "BASE_FOLDER": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\deriv 2\derivsymbols"
+    },
+    "bybit1": {
+        "TERMINAL_PATH": r"c:\xampp\htdocs\CIPHER\metaTrader5\cipher i\MetaTrader 5 bybit 1\terminal64.exe",
+        "LOGIN_ID": "4836528",
+        "PASSWORD": "@Techknowdge12#",
+        "SERVER": "Bybit-Live",
+        "ACCOUNT": "real",
+        "STRATEGY": "hightolow",
+        "BASE_FOLDER": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\bybit 1\bybitsymbols"
+    },
+    "exness1": {
+        "TERMINAL_PATH": r"c:\xampp\htdocs\CIPHER\metaTrader5\cipher i\MetaTrader 5 exness 1\terminal64.exe",
+        "LOGIN_ID": "63937917",
+        "PASSWORD": "T1aiwoThrone2",
+        "SERVER": "Exness-MT5Real9",
+        "ACCOUNT": "real",
+        "STRATEGY": "hightolow",
+        "BASE_FOLDER": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\exness 1\exness_symbols"
+    }
+}
+
+BASE_ERROR_FOLDER = r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\debugs"
+TIMEFRAME_MAP = {
+    "5m": mt5.TIMEFRAME_M5,
+    "15m": mt5.TIMEFRAME_M15,
+    "30m": mt5.TIMEFRAME_M30,
+    "1h": mt5.TIMEFRAME_H1,
+    "4h": mt5.TIMEFRAME_H4
+}
+ERROR_JSON_PATH = os.path.join(BASE_ERROR_FOLDER, "chart_errors.json")
+           
+def clear_chart_folder(base_folder):
+    """Clear all contents of the chart folder to ensure fresh data is saved."""
+    error_log = []
+    try:
+        if not os.path.exists(base_folder):
+            log_and_print(f"Chart folder {base_folder} does not exist, no need to clear.", "INFO")
+            return True, error_log
+
+        for item in os.listdir(base_folder):
+            item_path = os.path.join(base_folder, item)
+            try:
+                if os.path.isfile(item_path):
+                    os.remove(item_path)
+                elif os.path.isdir(item_path):
+                    import shutil
+                    shutil.rmtree(item_path)
+                log_and_print(f"Deleted {item_path}", "INFO")
+            except Exception as e:
+                error_log.append({
+                    "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                    "error": f"Failed to delete {item_path}: {str(e)}",
+                    "broker": base_folder
+                })
+                log_and_print(f"Failed to delete {item_path}: {str(e)}", "ERROR")
+
+        log_and_print(f"Chart folder {base_folder} cleared successfully", "SUCCESS")
+        return True, error_log
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to clear chart folder {base_folder}: {str(e)}",
+            "broker": base_folder
+        })
+        save_errors(error_log)
+        log_and_print(f"Failed to clear chart folder {base_folder}: {str(e)}", "ERROR")
+        return False, error_log
+
+def log_and_print(message, level="INFO"):
+    """Log and print messages in a structured format."""
+    timestamp = datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] {level:8} | {message}")
+
+def save_errors(error_log):
+    """Save error log to JSON file."""
+    try:
+        os.makedirs(BASE_ERROR_FOLDER, exist_ok=True)
+        with open(ERROR_JSON_PATH, 'w') as f:
+            json.dump(error_log, f, indent=4)
+        log_and_print("Error log saved", "ERROR")
+    except Exception as e:
+        log_and_print(f"Failed to save error log: {str(e)}", "ERROR")
+
+def initialize_mt5(terminal_path, login_id, password, server):
+    """Initialize MetaTrader 5 terminal for a specific broker."""
+    error_log = []
+    if not os.path.exists(terminal_path):
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"MT5 terminal executable not found: {terminal_path}",
+            "broker": server
+        })
+        save_errors(error_log)
+        log_and_print(f"MT5 terminal executable not found: {terminal_path}", "ERROR")
+        return False, error_log
+
+    try:
+        if not mt5.initialize(
+            path=terminal_path,
+            login=int(login_id),
+            server=server,
+            password=password,
+            timeout=30000
+        ):
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to initialize MT5: {mt5.last_error()}",
+                "broker": server
+            })
+            save_errors(error_log)
+            log_and_print(f"Failed to initialize MT5: {mt5.last_error()}", "ERROR")
+            return False, error_log
+
+        if not mt5.login(login=int(login_id), server=server, password=password):
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to login to MT5: {mt5.last_error()}",
+                "broker": server
+            })
+            save_errors(error_log)
+            log_and_print(f"Failed to login to MT5: {mt5.last_error()}", "ERROR")
+            mt5.shutdown()
+            return False, error_log
+
+        log_and_print(f"MT5 initialized and logged in successfully (loginid={login_id}, server={server})", "SUCCESS")
+        return True, error_log
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Unexpected error in initialize_mt5: {str(e)}",
+            "broker": server
+        })
+        save_errors(error_log)
+        log_and_print(f"Unexpected error in initialize_mt5: {str(e)}", "ERROR")
+        return False, error_log
+
+def get_symbols():
+    """Retrieve all available symbols from MT5."""
+    error_log = []
+    symbols = mt5.symbols_get()
+    if not symbols:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to retrieve symbols: {mt5.last_error()}",
+            "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+        })
+        save_errors(error_log)
+        log_and_print(f"Failed to retrieve symbols: {mt5.last_error()}", "ERROR")
+        return [], error_log
+
+    available_symbols = [s.name for s in symbols]
+    log_and_print(f"Retrieved {len(available_symbols)} symbols", "INFO")
+    return available_symbols, error_log
+
+def fetch_ohlcv_data(symbol, mt5_timeframe, bars):
+    """Fetch OHLCV data for a given symbol and timeframe."""
+    error_log = []
+    if not mt5.symbol_select(symbol, True):
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to select symbol {symbol}: {mt5.last_error()}",
+            "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+        })
+        save_errors(error_log)
+        log_and_print(f"Failed to select symbol {symbol}: {mt5.last_error()}", "ERROR")
+        return None, error_log
+
+    rates = mt5.copy_rates_from_pos(symbol, mt5_timeframe, 0, bars)
+    if rates is None or len(rates) == 0:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to retrieve rates for {symbol}: {mt5.last_error()}",
+            "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+        })
+        save_errors(error_log)
+        log_and_print(f"Failed to retrieve rates for {symbol}: {mt5.last_error()}", "ERROR")
+        return None, error_log
+
+    df = pd.DataFrame(rates)
+    df["time"] = pd.to_datetime(df["time"], unit="s")
+    df = df.set_index("time")
+    df = df.astype({
+        "open": float, "high": float, "low": float, "close": float,
+        "tick_volume": float, "spread": int, "real_volume": float
+    })
+    df.rename(columns={"tick_volume": "volume"}, inplace=True)
+    log_and_print(f"OHLCV data fetched for {symbol}", "INFO")
+    return df, error_log
+
+def identifyparenthighsandlows(df, neighborcandles_left, neighborcandles_right):
+    """Identify Parent Highs (PH) and Parent Lows (PL) based on neighbor candles."""
+    error_log = []
+    ph_indices = []
+    pl_indices = []
+    ph_labels = []
+    pl_labels = []
+
+    try:
+        for i in range(len(df)):
+            if i >= len(df) - neighborcandles_right:
+                continue
+
+            current_high = df.iloc[i]['high']
+            current_low = df.iloc[i]['low']
+            right_highs = df.iloc[i + 1:i + neighborcandles_right + 1]['high']
+            right_lows = df.iloc[i + 1:i + neighborcandles_right + 1]['low']
+            left_highs = df.iloc[max(0, i - neighborcandles_left):i]['high']
+            left_lows = df.iloc[max(0, i - neighborcandles_left):i]['low']
+
+            if len(right_highs) == neighborcandles_right:
+                is_ph = True
+                if len(left_highs) > 0:
+                    is_ph = current_high > left_highs.max()
+                is_ph = is_ph and current_high > right_highs.max()
+                if is_ph:
+                    ph_indices.append(df.index[i])
+                    ph_labels.append(('PH', current_high, df.index[i]))
+
+            if len(right_lows) == neighborcandles_right:
+                is_pl = True
+                if len(left_lows) > 0:
+                    is_pl = current_low < left_lows.min()
+                is_pl = is_pl and current_low < right_lows.min()
+                if is_pl:
+                    pl_indices.append(df.index[i])
+                    pl_labels.append(('PL', current_low, df.index[i]))
+
+        log_and_print(f"Identified {len(ph_indices)} PH and {len(pl_indices)} PL for {df['symbol'].iloc[0]}", "INFO")
+        return ph_labels, pl_labels, error_log
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to identify PH/PL: {str(e)}",
+            "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+        })
+        save_errors(error_log)
+        log_and_print(f"Failed to identify PH/PL: {str(e)}", "ERROR")
+        return [], [], error_log
+
+def save_candle_data(df, symbol, timeframe_str, timeframe_folder, ph_labels, pl_labels):
+    """Save all candle data with numbering and PH/PL labels."""
+    error_log = []
+    candle_json_path = os.path.join(timeframe_folder, "all_candles.json")
+    try:
+        if len(df) >= 2:
+            candles = []
+            ph_dict = {t: label for label, _, t in ph_labels}
+            pl_dict = {t: label for label, _, t in pl_labels}
+
+            for i, (index, row) in enumerate(df[::-1].iterrows()):
+                candle = row.to_dict()
+                candle["time"] = index.strftime('%Y-%m-%d %H:%M:%S')
+                candle["candle_number"] = i
+                candle["symbol"] = symbol
+                candle["timeframe"] = timeframe_str
+                candle["is_ph"] = ph_dict.get(index, None) == 'PH'
+                candle["is_pl"] = pl_dict.get(index, None) == 'PL'
+                candles.append(candle)
+            with open(candle_json_path, 'w') as f:
+                json.dump(candles, f, indent=4)
+            log_and_print(f"Candle data saved for {symbol} ({timeframe_str})", "SUCCESS")
+        else:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Not enough data to save candles for {symbol} ({timeframe_str})",
+                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+            })
+            save_errors(error_log)
+            log_and_print(f"Not enough data to save candles for {symbol} ({timeframe_str})", "ERROR")
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to save candles for {symbol} ({timeframe_str}): {str(e)}",
+            "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+        })
+        save_errors(error_log)
+        log_and_print(f"Failed to save candles for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
+    return error_log
+
+def generate_and_save_chart(df, symbol, timeframe_str, timeframe_folder, neighborcandles_left, neighborcandles_right):
+    """Generate and save a basic candlestick chart as chart.png, then identify PH/PL and save as chartanalysed.png with markers."""
+    error_log = []
+    chart_path = os.path.join(timeframe_folder, "chart.png")
+    chart_analysed_path = os.path.join(timeframe_folder, "chartanalysed.png")
+    trendline_log_json_path = os.path.join(timeframe_folder, "trendline_log.json")
+    trendline_log = []
+
+    try:
+        custom_style = mpf.make_mpf_style(
+            base_mpl_style="default",
+            marketcolors=mpf.make_marketcolors(
+                up="green",
+                down="red",
+                edge="inherit",
+                wick={"up": "green", "down": "red"},
+                volume="gray"
+            )
+        )
+
+        # Step 1: Save basic candlestick chart as chart.png
+        fig, axlist = mpf.plot(
+            df,
+            type='candle',
+            style=custom_style,
+            volume=False,
+            title=f"{symbol} ({timeframe_str})",
+            returnfig=True
+        )
+
+        # Adjust wick thickness for basic chart
+        for ax in axlist:
+            for line in ax.get_lines():
+                if line.get_label() == '':
+                    line.set_linewidth(0.5)
+
+        current_size = fig.get_size_inches()
+        fig.set_size_inches(25, current_size[1])
+        axlist[0].grid(False)
+        fig.savefig(chart_path, bbox_inches="tight", dpi=100)
+        plt.close(fig)
+        log_and_print(f"Basic chart saved for {symbol} ({timeframe_str}) as {chart_path}", "SUCCESS")
+
+        # Step 2: Identify PH/PL
+        ph_labels, pl_labels, phpl_errors = identifyparenthighsandlows(df, neighborcandles_left, neighborcandles_right)
+        error_log.extend(phpl_errors)
+
+        # Step 3: Prepare annotations for analyzed chart with PH/PL markers
+        apds = []
+        if ph_labels:
+            ph_series = pd.Series([np.nan] * len(df), index=df.index)
+            for _, price, t in ph_labels:
+                ph_series.loc[t] = price
+            apds.append(mpf.make_addplot(
+                ph_series,
+                type='scatter',
+                markersize=100,
+                marker='^',
+                color='blue'
+            ))
+        if pl_labels:
+            pl_series = pd.Series([np.nan] * len(df), index=df.index)
+            for _, price, t in pl_labels:
+                pl_series.loc[t] = price
+            apds.append(mpf.make_addplot(
+                pl_series,
+                type='scatter',
+                markersize=100,
+                marker='v',
+                color='purple'
+            ))
+
+        trendline_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "symbol": symbol,
+            "timeframe": timeframe_str,
+            "team_type": "initial",
+            "status": "info",
+            "reason": f"Found {len(ph_labels)} PH points and {len(pl_labels)} PL points",
+            "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+        })
+
+        # Save Trendline Log (only PH/PL info, no trendlines)
+        try:
+            with open(trendline_log_json_path, 'w') as f:
+                json.dump(trendline_log, f, indent=4)
+            log_and_print(f"Trendline log saved for {symbol} ({timeframe_str})", "SUCCESS")
+        except Exception as e:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to save trendline log for {symbol} ({timeframe_str}): {str(e)}",
+                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+            })
+            log_and_print(f"Failed to save trendline log for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
+
+        # Step 4: Save analyzed chart with PH/PL markers as chartanalysed.png
+        fig, axlist = mpf.plot(
+            df,
+            type='candle',
+            style=custom_style,
+            volume=False,
+            title=f"{symbol} ({timeframe_str}) - Analysed",
+            addplot=apds if apds else None,
+            returnfig=True
+        )
+
+        # Adjust wick thickness for analyzed chart
+        for ax in axlist:
+            for line in ax.get_lines():
+                if line.get_label() == '':
+                    line.set_linewidth(0.5)
+
+        current_size = fig.get_size_inches()
+        fig.set_size_inches(25, current_size[1])
+        axlist[0].grid(True, linestyle='--')
+        fig.savefig(chart_analysed_path, bbox_inches="tight", dpi=100)
+        plt.close(fig)
+        log_and_print(f"Analysed chart saved for {symbol} ({timeframe_str}) as {chart_analysed_path}", "SUCCESS")
+
+        return chart_path, error_log, ph_labels, pl_labels
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to save charts for {symbol} ({timeframe_str}): {str(e)}",
+            "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+        })
+        trendline_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "symbol": symbol,
+            "timeframe": timeframe_str,
+            "status": "failed",
+            "reason": f"Chart generation failed: {str(e)}",
+            "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+        })
+        with open(trendline_log_json_path, 'w') as f:
+            json.dump(trendline_log, f, indent=4)
+        save_errors(error_log)
+        log_and_print(f"Failed to save charts for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
+        return chart_path if os.path.exists(chart_path) else None, error_log, [], []
+
+def draw_dashed_line(img, start_point, end_point, color=(0, 0, 0), thickness=1, dash_length=10, gap_length=10):
+    """Draw a dashed line on the image from start_point to end_point."""
+    x1, y1 = start_point
+    x2, y2 = end_point
+    # Calculate the length of the line
+    length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+    if length == 0:
+        return
+    # Calculate the unit vector
+    dx = (x2 - x1) / length
+    dy = (y2 - y1) / length
+    # Draw dashes
+    current_length = 0
+    while current_length < length:
+        start_x = int(x1 + dx * current_length)
+        start_y = int(y1 + dy * current_length)
+        end_x = int(x1 + dx * min(current_length + dash_length, length))
+        end_y = int(y1 + dy * min(current_length + dash_length, length))
+        cv2.line(img, (start_x, start_y), (end_x, end_y), color, thickness)
+        current_length += dash_length + gap_length
+
+def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder):
+    error_log = []
+    contour_json_path = os.path.join(timeframe_folder, "chart_contours.json")
+    trendline_log_json_path = os.path.join(timeframe_folder, "trendline_log.json")
+    output_image_path = os.path.join(timeframe_folder, "chart_with_contours.png")
+    candle_json_path = os.path.join(timeframe_folder, "all_candles.json")
+    trendline_log = []
+
+    try:
+        # Load the image
+        img = cv2.imread(chart_path)
+        if img is None:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to load chart image {chart_path} for contour detection",
+                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+            })
+            save_errors(error_log)
+            log_and_print(f"Failed to load chart image {chart_path} for contour detection", "ERROR")
+            return error_log
+
+        img_height, img_width = img.shape[:2]
+
+        # Load PH/PL and candle data from all_candles.json
+        try:
+            with open(candle_json_path, 'r') as f:
+                candle_data = json.load(f)
+        except Exception as e:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to load {candle_json_path} for PH/PL data: {str(e)}",
+                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+            })
+            save_errors(error_log)
+            log_and_print(f"Failed to load {candle_json_path} for PH/PL data: {str(e)}", "ERROR")
+            return error_log
+
+        # Extract PH/PL candles
+        ph_candles = [c for c in candle_data if c.get("is_ph", False)]
+        pl_candles = [c for c in candle_data if c.get("is_pl", False)]
+        ph_indices = {int(c["candle_number"]): c for c in ph_candles}
+        pl_indices = {int(c["candle_number"]): c for c in pl_candles}
+
+        # Convert to HSV for better color detection
+        img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+        # Define color ranges for green (up) and red (down) candles
+        green_lower = np.array([35, 50, 50])
+        green_upper = np.array([85, 255, 255])
+        green_mask = cv2.inRange(img_hsv, green_lower, green_upper)
+
+        red_lower1 = np.array([0, 50, 50])
+        red_upper1 = np.array([10, 255, 255])
+        red_lower2 = np.array([170, 50, 50])
+        red_upper2 = np.array([180, 255, 255])
+        red_mask = cv2.inRange(img_hsv, red_lower1, red_upper1) | cv2.inRange(img_hsv, red_lower2, red_upper2)
+
+        # Find contours for green and red candles
+        green_contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        red_contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Sort contours from right to left (newest to oldest) for candle counting
+        green_contours = sorted(green_contours, key=lambda c: cv2.boundingRect(c)[0], reverse=True)
+        red_contours = sorted(red_contours, key=lambda c: cv2.boundingRect(c)[0], reverse=True)
+
+        # Count the number of candle contours
+        green_count = len(green_contours)
+        red_count = len(red_contours)
+        total_count = green_count + red_count
+
+        # Combine and sort all contours by x-coordinate (right to left, newest to oldest)
+        all_contours = green_contours + red_contours
+        all_contours = sorted(all_contours, key=lambda c: cv2.boundingRect(c)[0], reverse=True)
+
+        # Map x-coordinates to candle numbers and store candle bounds
+        contour_positions = {}
+        candle_bounds = {}
+        for i, contour in enumerate(all_contours):
+            x, y, w, h = cv2.boundingRect(contour)
+            contour_positions[i] = {"x": x + w // 2, "y": y, "width": w, "height": h}
+            # Get candle data for bounds
+            candle = candle_data[i]
+            candle_bounds[i] = {
+                "high_y": y,  # Top of the candle (wick)
+                "low_y": y + h,  # Bottom of the candle (wick)
+                "body_top_y": y + min(h // 4, 10),  # Approximate body top
+                "body_bottom_y": y + h - min(h // 4, 10),  # Approximate body bottom
+                "x_left": x,
+                "x_right": x + w,
+                "high": float(candle["high"]),
+                "low": float(candle["low"])
+            }
+
+        # Draw contours and PH/PL markers on the original image
+        for i, contour in enumerate(all_contours):
+            x, y, w, h = cv2.boundingRect(contour)
+            # Draw candle borders
+            if cv2.pointPolygonTest(contour, (x + w // 2, y + h // 2), False) >= 0:
+                if green_mask[y + h // 2, x + w // 2] > 0:
+                    # Dim green borders for green (up) candles
+                    cv2.drawContours(img, [contour], -1, (0, 128, 0), 1)
+                elif red_mask[y + h // 2, x + w // 2] > 0:
+                    # Red borders for red (down) candles
+                    cv2.drawContours(img, [contour], -1, (0, 0, 255), 1)
+
+            # Add PH/PL markers
+            if i in ph_indices:
+                # Draw blue upward triangle for PH above the candle
+                points = np.array([
+                    [x + w // 2, y - 10],  # Top vertex
+                    [x + w // 2 - 10, y + 5],  # Bottom-left
+                    [x + w // 2 + 10, y + 5]   # Bottom-right
+                ])
+                cv2.fillPoly(img, [points], color=(255, 0, 0))  # Blue in BGR
+            if i in pl_indices:
+                # Draw purple downward triangle for PL below the candle
+                points = np.array([
+                    [x + w // 2, y + h + 10],  # Bottom vertex
+                    [x + w // 2 - 10, y + h - 5],  # Top-left
+                    [x + w // 2 + 10, y + h - 5]   # Top-right
+                ])
+                cv2.fillPoly(img, [points], color=(128, 0, 128))  # Purple in BGR
+
+        # Draw PH-to-PH and PL-to-PL trendlines
+        ph_teams = []
+        pl_teams = []
+        ph_additional_trendlines = []  # Store additional PH-to-PH trendlines (to main intersectors)
+        pl_additional_trendlines = []  # Store additional PL-to-PL trendlines (to main intersectors)
+
+        # Sort PH and PL by candle_number (descending) to process from oldest to newest (left to right)
+        sorted_ph = sorted(ph_indices.items(), key=lambda x: x[0], reverse=True)
+        sorted_pl = sorted(pl_indices.items(), key=lambda x: x[0], reverse=True)
+
+        # Function to find intersectors
+        def find_intersectors(sender_idx, receiver_idx, sender_x, sender_y, is_ph):
+            """
+            Find up to three intersectors to the right of sender_idx up to receiver_idx that the trendline intersects.
+            The first intersector uses high (for PH) or low (for PL). The next two use the candle body,
+            stopping if a subsequent intersector's high (for PH) is higher than the first intersector's high,
+            or low (for PL) is lower than the first intersector's low. Returns a list of (idx, x, y, price, is_first, high_y, low_y) tuples.
+            If fewer than three intersectors are found, return those found. If none, return an empty list.
+            """
+            intersectors = []
+            # Calculate the slope using sender and receiver positions
+            receiver_pos = contour_positions.get(receiver_idx)
+            receiver_y = receiver_pos["y"] if is_ph else receiver_pos["y"] + receiver_pos["height"]
+            dx = receiver_pos["x"] - sender_x
+            dy = receiver_y - sender_y
+            if dx == 0:
+                slope = float('inf')
+            else:
+                slope = dy / dx
+
+            i = receiver_idx - 1
+            found_first = False
+            first_intersector_price = None
+            while i >= 0 and len(intersectors) < 3:
+                if i not in candle_bounds or i == sender_idx or i == receiver_idx:
+                    i -= 1
+                    continue
+                bounds = candle_bounds[i]
+                # Calculate y-coordinate of the trendline at the candle's x_left
+                x = bounds["x_left"]
+                if slope == float('inf'):
+                    y = sender_y  # Vertical line (unlikely)
+                else:
+                    y = sender_y + slope * (x - sender_x)
+                # Check for first intersector
+                if not found_first:
+                    # For PH, check if y is near the high; for PL, check if y is near the low
+                    price = bounds["high"] if is_ph else bounds["low"]
+                    price_range = max(c["high"] for c in candle_data) - min(c["low"] for c in candle_data)
+                    if price_range == 0:
+                        y_price = y
+                    else:
+                        min_y = min(b["high_y"] for b in candle_bounds.values())
+                        max_y = max(b["low_y"] for b in candle_bounds.values())
+                        price_min = min(c["low"] for c in candle_data)
+                        y_price = max_y - ((price - price_min) / price_range) * (max_y - min_y)
+                        y_price = int(y_price)
+                    # Allow some tolerance for floating-point imprecision
+                    if abs(y - y_price) <= 10:  # Tolerance in pixels
+                        intersectors.append((i, x, y_price, price, True, bounds["high_y"], bounds["low_y"]))
+                        found_first = True
+                        first_intersector_price = price
+                        i -= 1
+                        continue
+                # Check subsequent intersectors (body only, up to two)
+                if found_first and bounds["body_top_y"] <= y <= bounds["body_bottom_y"]:
+                    # Check the high (for PH) or low (for PL) against the first intersector
+                    current_price = bounds["high"] if is_ph else bounds["low"]
+                    if is_ph and current_price > first_intersector_price:
+                        intersectors.append((i, x, int(y), None, False, bounds["high_y"], bounds["low_y"]))
+                        break  # Stop at this intersector
+                    elif not is_ph and current_price < first_intersector_price:
+                        intersectors.append((i, x, int(y), None, False, bounds["high_y"], bounds["low_y"]))
+                        break  # Stop at this intersector
+                    # Include this intersector
+                    intersectors.append((i, x, int(y), None, False, bounds["high_y"], bounds["low_y"]))
+                i -= 1
+            return intersectors, slope
+
+        # Function to find intruder between sender and receiver
+        def find_intruder(sender_idx, receiver_idx, sender_price, is_ph):
+            """
+            Check for an intruder candle between sender_idx and receiver_idx.
+            For PH-to-PH: return the index of the first candle with high > sender_price.
+            For PL-to-PL: return the index of the first candle with low < sender_price.
+            Return None if no intruder is found.
+            """
+            start_idx = min(sender_idx, receiver_idx) + 1
+            end_idx = max(sender_idx, receiver_idx) - 1
+            for i in range(start_idx, end_idx + 1):
+                if i in candle_bounds:
+                    candle = candle_bounds[i]
+                    price = candle["high"] if is_ph else candle["low"]
+                    if (is_ph and price > sender_price) or (not is_ph and price < sender_price):
+                        return i
+            return None
+
+        # Function to find the first candle body that intersects a price level
+        def find_first_body_intersection(start_idx, start_y, price, is_ph):
+            """
+            Find the first candle body to the right of start_idx that intersects the price level at start_y.
+            For PH, check if the body intersects the high price level.
+            For PL, check if the body intersects the low price level.
+            Returns (idx, x, y) if found, else None.
+            """
+            for idx in range(start_idx - 1, -1, -1):  # Move right to left (newer candles)
+                if idx not in candle_bounds:
+                    continue
+                bounds = candle_bounds[idx]
+                if is_ph:
+                    # Check if the high price level (start_y) intersects the candle body
+                    if bounds["body_top_y"] <= start_y <= bounds["body_bottom_y"]:
+                        return idx, bounds["x_left"], start_y
+                else:
+                    # Check if the low price level (start_y) intersects the candle body
+                    if bounds["body_top_y"] <= start_y <= bounds["body_bottom_y"]:
+                        return idx, bounds["x_left"], start_y
+            return None
+
+        # Process PH-to-PH trendlines (left to right, oldest to newest)
+        i = 0
+        while i < len(sorted_ph) - 1:
+            sender_idx, sender_data = sorted_ph[i]
+            sender_high = float(sender_data["high"])
+
+            # Check for immediate intruder (next PH with higher high)
+            if i + 1 < len(sorted_ph):
+                next_idx, next_data = sorted_ph[i + 1]
+                next_high = float(next_data["high"])
+                if next_high > sender_high:
+                    trendline_log.append({
+                        "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "team_type": "PH-to-PH",
+                        "status": "skipped",
+                        "reason": f"Immediate intruder PH found at candle {next_idx} (high {next_high}) higher than sender high {sender_high} (candle {sender_idx}), setting intruder as new sender",
+                        "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                    })
+                    i += 1
+                    continue
+
+            # Find the best receiver PH (highest high that is still lower than sender_high)
+            best_receiver_idx = None
+            best_receiver_high = float('-inf')
+            j = i + 1
+            while j < len(sorted_ph):
+                candidate_idx, candidate_data = sorted_ph[j]
+                candidate_high = float(candidate_data["high"])
+                if sender_high > candidate_high > best_receiver_high:
+                    best_receiver_idx = candidate_idx
+                    best_receiver_high = candidate_high
+                j += 1
+
+            if best_receiver_idx is not None:
+                # Check for intruder between sender and receiver
+                intruder_idx = find_intruder(sender_idx, best_receiver_idx, sender_high, is_ph=True)
+                if intruder_idx is not None:
+                    intruder_high = candle_bounds[intruder_idx]["high"]
+                    trendline_log.append({
+                        "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "team_type": "PH-to-PH",
+                        "status": "skipped",
+                        "reason": f"Intruder candle found at candle {intruder_idx} (high {intruder_high}) higher than sender high {sender_high} (candle {sender_idx}) between sender and receiver (candle {best_receiver_idx}), setting receiver as new sender",
+                        "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                    })
+                    # Set the receiver as the new sender
+                    i = next((k for k, (idx, _) in enumerate(sorted_ph) if idx == best_receiver_idx), i + 1)
+                    continue
+
+                sender_pos = contour_positions.get(sender_idx)
+                receiver_pos = contour_positions.get(best_receiver_idx)
+                if sender_pos and receiver_pos:
+                    sender_x = sender_pos["x"]
+                    sender_y = sender_pos["y"]  # Top of sender candle (PH)
+                    receiver_x = receiver_pos["x"]
+                    receiver_y = receiver_pos["y"]  # Top of receiver candle (PH)
+
+                    # Find up to three intersectors for the main trendline
+                    intersectors, slope = find_intersectors(sender_idx, best_receiver_idx, sender_x, sender_y, is_ph=True)
+
+                    # Initialize team data
+                    team_data = {
+                        "sender": {"candle_number": sender_idx, "high": sender_high, "x": sender_x, "y": sender_y},
+                        "receiver": {"candle_number": best_receiver_idx, "high": best_receiver_high, "x": receiver_x, "y": receiver_y},
+                        "intersectors": []
+                    }
+                    reason = ""
+
+                    # Determine which trendline to keep based on cleansing rules
+                    if not intersectors:
+                        # Case 1: No intersectors, keep sender to receiver trendline
+                        cv2.line(img, (sender_x, sender_y), (receiver_x, receiver_y), color=(255, 0, 0), thickness=1)  # Blue in BGR
+                        team_data["target"] = {
+                            "type": "receiver",
+                            "candle_number": best_receiver_idx,
+                            "high": best_receiver_high,
+                            "x": receiver_x,
+                            "y": receiver_y
+                        }
+                        reason = f"Drew PH-to-PH trendline from sender (candle {sender_idx}, high {sender_high}, x={sender_x}, y={sender_y}) to receiver (candle {best_receiver_idx}, high {best_receiver_high}, x={receiver_x}, y={receiver_y}) as no intersectors found"
+                    elif len(intersectors) == 1:
+                        # Case 2: Only first intersector, keep sender to first intersector trendline
+                        idx, x, y, price, is_first, high_y, low_y = intersectors[0]
+                        cv2.line(img, (sender_x, sender_y), (x, high_y), color=(255, 0, 0), thickness=1)  # Blue in BGR
+                        # Draw star marker for first intersector
+                        star_points = [
+                            [x, high_y - 15], [x + 4, high_y - 5], [x + 14, high_y - 5], [x + 5, high_y + 2],
+                            [x + 10, high_y + 12], [x, high_y + 7], [x - 10, high_y + 12], [x - 5, high_y + 2],
+                            [x - 14, high_y - 5], [x - 4, high_y - 5]
+                        ]
+                        cv2.fillPoly(img, [np.array(star_points)], color=(255, 0, 0))  # Blue in BGR
+                        team_data["intersectors"].append({
+                            "candle_number": idx,
+                            "high": price,
+                            "x": x,
+                            "y": high_y,
+                            "is_first": True,
+                            "marker": "star"
+                        })
+                        team_data["target"] = {
+                            "type": "intersector",
+                            "candle_number": idx,
+                            "high": price,
+                            "x": x,
+                            "y": high_y,
+                            "is_first": True,
+                            "marker": "star"
+                        }
+                        reason = f"Drew PH-to-PH trendline from sender (candle {sender_idx}, high {sender_high}, x={sender_x}, y={sender_y}) to first intersector (candle {idx}, high {price}, x={x}, y={high_y}, marker=star) as only one intersector found"
+                    elif len(intersectors) == 2:
+                        # Case 3: First and second intersectors, keep sender to second intersector trendline
+                        idx, x, y, price, is_first, high_y, low_y = intersectors[0]
+                        # Draw star marker for first intersector
+                        star_points = [
+                            [x, high_y - 15], [x + 4, high_y - 5], [x + 14, high_y - 5], [x + 5, high_y + 2],
+                            [x + 10, high_y + 12], [x, high_y + 7], [x - 10, high_y + 12], [x - 5, high_y + 2],
+                            [x - 14, high_y - 5], [x - 4, high_y - 5]
+                        ]
+                        cv2.fillPoly(img, [np.array(star_points)], color=(255, 0, 0))  # Blue in BGR
+                        team_data["intersectors"].append({
+                            "candle_number": idx,
+                            "high": price,
+                            "x": x,
+                            "y": high_y,
+                            "is_first": True,
+                            "marker": "star"
+                        })
+                        # Draw trendline to second intersector
+                        second_idx, second_x, second_y, _, _, second_high_y, _ = intersectors[1]
+                        second_high = candle_bounds[second_idx]["high"]
+                        cv2.line(img, (sender_x, sender_y), (second_x, second_high_y), color=(255, 0, 0), thickness=1)  # Blue in BGR
+                        cv2.circle(img, (second_x, second_y), 5, color=(255, 0, 0), thickness=-1)  # Blue circle for second intersector
+                        team_data["intersectors"].append({
+                            "candle_number": second_idx,
+                            "high": None,
+                            "x": second_x,
+                            "y": second_y,
+                            "is_first": False,
+                            "marker": "circle"
+                        })
+                        team_data["target"] = {
+                            "type": "intersector",
+                            "candle_number": second_idx,
+                            "high": second_high,
+                            "x": second_x,
+                            "y": second_high_y,
+                            "is_first": False,
+                            "marker": "circle"
+                        }
+                        reason = f"Drew PH-to-PH trendline from sender (candle {sender_idx}, high {sender_high}, x={sender_x}, y={sender_y}) to second intersector (candle {second_idx}, high {second_high}, x={second_x}, y={second_high_y}, marker=circle) as only two intersectors found"
+                    elif len(intersectors) >= 3:
+                        # Case 4: Three intersectors, keep sender to highest high of 2nd or 3rd intersector
+                        idx, x, y, price, is_first, high_y, low_y = intersectors[0]
+                        # Draw star marker for first intersector
+                        star_points = [
+                            [x, high_y - 15], [x + 4, high_y - 5], [x + 14, high_y - 5], [x + 5, high_y + 2],
+                            [x + 10, high_y + 12], [x, high_y + 7], [x - 10, high_y + 12], [x - 5, high_y + 2],
+                            [x - 14, high_y - 5], [x - 4, high_y - 5]
+                        ]
+                        cv2.fillPoly(img, [np.array(star_points)], color=(255, 0, 0))  # Blue in BGR
+                        team_data["intersectors"].append({
+                            "candle_number": idx,
+                            "high": price,
+                            "x": x,
+                            "y": high_y,
+                            "is_first": True,
+                            "marker": "star"
+                        })
+                        # Compare 2nd and 3rd intersectors
+                        second_idx, second_x, second_y, _, _, second_high_y, _ = intersectors[1]
+                        third_idx, third_x, third_y, _, _, third_high_y, _ = intersectors[2]
+                        second_high = candle_bounds[second_idx]["high"]
+                        third_high = candle_bounds[third_idx]["high"]
+                        if second_high > third_high:
+                            # Keep trendline to second intersector
+                            cv2.line(img, (sender_x, sender_y), (second_x, second_high_y), color=(255, 0, 0), thickness=1)  # Blue in BGR
+                            cv2.circle(img, (second_x, second_y), 5, color=(255, 0, 0), thickness=-1)  # Blue circle
+                            # Draw chevron down at second intersector's high
+                            chevron_points = np.array([
+                                [second_x - 10, second_high_y - 10],  # Left top
+                                [second_x, second_high_y],           # Center bottom
+                                [second_x + 10, second_high_y - 10]  # Right top
+                            ])
+                            cv2.fillPoly(img, [chevron_points], color=(255, 0, 0))  # Blue in BGR
+                            team_data["intersectors"].append({
+                                "candle_number": second_idx,
+                                "high": None,
+                                "x": second_x,
+                                "y": second_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            })
+                            team_data["intersectors"].append({
+                                "candle_number": third_idx,
+                                "high": None,
+                                "x": third_x,
+                                "y": third_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            })
+                            team_data["target"] = {
+                                "type": "intersector",
+                                "candle_number": second_idx,
+                                "high": second_high,
+                                "x": second_x,
+                                "y": second_high_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            }
+                            reason = f"Drew PH-to-PH trendline from sender (candle {sender_idx}, high {sender_high}, x={sender_x}, y={sender_y}) to second intersector (candle {second_idx}, high {second_high}, x={second_x}, y={second_high_y}, marker=circle) as it has higher high than third intersector (candle {third_idx}, high {third_high})"
+                            trendline_log.append({
+                                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                                "symbol": symbol,
+                                "timeframe": timeframe_str,
+                                "team_type": "PH-intersector-compare",
+                                "status": "success",
+                                "reason": f"Marked 2nd intersector (candle {second_idx}, high {second_high}, x={second_x}, y={second_high_y}) with chevron down as it has higher high than 3rd intersector (candle {third_idx}, high {third_high})",
+                                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                            })
+                        else:
+                            # Keep trendline to third intersector
+                            cv2.line(img, (sender_x, sender_y), (third_x, third_high_y), color=(255, 0, 0), thickness=1)  # Blue in BGR
+                            cv2.circle(img, (third_x, third_y), 5, color=(255, 0, 0), thickness=-1)  # Blue circle
+                            # Draw chevron down at third intersector's high
+                            chevron_points = np.array([
+                                [third_x - 10, third_high_y - 10],  # Left top
+                                [third_x, third_high_y],            # Center bottom
+                                [third_x + 10, third_high_y - 10]   # Right top
+                            ])
+                            cv2.fillPoly(img, [chevron_points], color=(255, 0, 0))  # Blue in BGR
+                            team_data["intersectors"].append({
+                                "candle_number": second_idx,
+                                "high": None,
+                                "x": second_x,
+                                "y": second_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            })
+                            team_data["intersectors"].append({
+                                "candle_number": third_idx,
+                                "high": None,
+                                "x": third_x,
+                                "y": third_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            })
+                            team_data["target"] = {
+                                "type": "intersector",
+                                "candle_number": third_idx,
+                                "high": third_high,
+                                "x": third_x,
+                                "y": third_high_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            }
+                            reason = f"Drew PH-to-PH trendline from sender (candle {sender_idx}, high {sender_high}, x={sender_x}, y={sender_y}) to third intersector (candle {third_idx}, high {third_high}, x={third_x}, y={third_high_y}, marker=circle) as it has higher high than second intersector (candle {second_idx}, high {second_high})"
+                            trendline_log.append({
+                                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                                "symbol": symbol,
+                                "timeframe": timeframe_str,
+                                "team_type": "PH-intersector-compare",
+                                "status": "success",
+                                "reason": f"Marked 3rd intersector (candle {third_idx}, high {third_high}, x={third_x}, y={third_high_y}) with chevron down as it has higher high than 2nd intersector (candle {second_idx}, high {second_high})",
+                                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                            })
+
+                    trendline_log.append({
+                        "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "team_type": "PH-to-PH",
+                        "status": "success",
+                        "reason": reason,
+                        "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                    })
+                    ph_teams.append(team_data)
+                    ph_additional_trendlines.append(team_data["target"])  # Store only the kept trendline
+
+                    # Skip to the candle after the receiver
+                    i = next((k for k, (idx, _) in enumerate(sorted_ph) if idx == best_receiver_idx), i + 1) + 1
+                else:
+                    error_log.append({
+                        "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                        "error": f"Missing contour positions for PH sender (candle {sender_idx}) or receiver (candle {best_receiver_idx})",
+                        "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                    })
+                    i += 1
+            else:
+                trendline_log.append({
+                    "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                    "symbol": symbol,
+                    "timeframe": timeframe_str,
+                    "team_type": "PH-to-PH",
+                    "status": "skipped",
+                    "reason": f"No valid PH receiver found for sender high {sender_high} (candle {sender_idx})",
+                    "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                })
+                i += 1
+
+        # Process PL-to-PL trendlines (left to right, oldest to newest)
+        i = 0
+        while i < len(sorted_pl) - 1:
+            sender_idx, sender_data = sorted_pl[i]
+            sender_low = float(sender_data["low"])
+
+            # Check for immediate intruder (next PL with lower low)
+            if i + 1 < len(sorted_pl):
+                next_idx, next_data = sorted_pl[i + 1]
+                next_low = float(next_data["low"])
+                if next_low < sender_low:
+                    trendline_log.append({
+                        "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "team_type": "PL-to-PL",
+                        "status": "skipped",
+                        "reason": f"Immediate intruder PL found at candle {next_idx} (low {next_low}) lower than sender low {sender_low} (candle {sender_idx}), setting intruder as new sender",
+                        "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                    })
+                    i += 1
+                    continue
+
+            # Find the best receiver PL (lowest low that is still higher than sender_low)
+            best_receiver_idx = None
+            best_receiver_low = float('inf')
+            j = i + 1
+            while j < len(sorted_pl):
+                candidate_idx, candidate_data = sorted_pl[j]
+                candidate_low = float(candidate_data["low"])
+                if sender_low < candidate_low < best_receiver_low:
+                    best_receiver_idx = candidate_idx
+                    best_receiver_low = candidate_low
+                j += 1
+
+            if best_receiver_idx is not None:
+                # Check for intruder between sender and receiver
+                intruder_idx = find_intruder(sender_idx, best_receiver_idx, sender_low, is_ph=False)
+                if intruder_idx is not None:
+                    intruder_low = candle_bounds[intruder_idx]["low"]
+                    trendline_log.append({
+                        "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "team_type": "PL-to-PL",
+                        "status": "skipped",
+                        "reason": f"Intruder candle found at candle {intruder_idx} (low {intruder_low}) lower than sender low {sender_low} (candle {sender_idx}) between sender and receiver (candle {best_receiver_idx}), setting receiver as new sender",
+                        "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                    })
+                    # Set the receiver as the new sender
+                    i = next((k for k, (idx, _) in enumerate(sorted_pl) if idx == best_receiver_idx), i + 1)
+                    continue
+
+                sender_pos = contour_positions.get(sender_idx)
+                receiver_pos = contour_positions.get(best_receiver_idx)
+                if sender_pos and receiver_pos:
+                    sender_x = sender_pos["x"]
+                    sender_y = sender_pos["y"] + sender_pos["height"]  # Bottom of sender candle (PL)
+                    receiver_x = receiver_pos["x"]
+                    receiver_y = receiver_pos["y"] + receiver_pos["height"]  # Bottom of receiver candle (PL)
+
+                    # Find up to three intersectors for the main trendline
+                    intersectors, slope = find_intersectors(sender_idx, best_receiver_idx, sender_x, sender_y, is_ph=False)
+
+                    # Initialize team data
+                    team_data = {
+                        "sender": {"candle_number": sender_idx, "low": sender_low, "x": sender_x, "y": sender_y},
+                        "receiver": {"candle_number": best_receiver_idx, "low": best_receiver_low, "x": receiver_x, "y": receiver_y},
+                        "intersectors": []
+                    }
+                    reason = ""
+
+                    # Determine which trendline to keep based on cleansing rules
+                    if not intersectors:
+                        # Case 1: No intersectors, keep sender to receiver trendline
+                        cv2.line(img, (sender_x, sender_y), (receiver_x, receiver_y), color=(0, 255, 255), thickness=1)  # Yellow in BGR
+                        team_data["target"] = {
+                            "type": "receiver",
+                            "candle_number": best_receiver_idx,
+                            "low": best_receiver_low,
+                            "x": receiver_x,
+                            "y": receiver_y
+                        }
+                        reason = f"Drew PL-to-PL trendline from sender (candle {sender_idx}, low {sender_low}, x={sender_x}, y={sender_y}) to receiver (candle {best_receiver_idx}, low {best_receiver_low}, x={receiver_x}, y={receiver_y}) as no intersectors found"
+                    elif len(intersectors) == 1:
+                        # Case 2: Only first intersector, keep sender to first intersector trendline
+                        idx, x, y, price, is_first, high_y, low_y = intersectors[0]
+                        cv2.line(img, (sender_x, sender_y), (x, low_y), color=(0, 255, 255), thickness=1)  # Yellow in BGR
+                        # Draw star marker for first intersector
+                        star_points = [
+                            [x, low_y - 15], [x + 4, low_y - 5], [x + 14, low_y - 5], [x + 5, low_y + 2],
+                            [x + 10, low_y + 12], [x, low_y + 7], [x - 10, low_y + 12], [x - 5, low_y + 2],
+                            [x - 14, low_y - 5], [x - 4, low_y - 5]
+                        ]
+                        cv2.fillPoly(img, [np.array(star_points)], color=(0, 255, 255))  # Yellow in BGR
+                        team_data["intersectors"].append({
+                            "candle_number": idx,
+                            "low": price,
+                            "x": x,
+                            "y": low_y,
+                            "is_first": True,
+                            "marker": "star"
+                        })
+                        team_data["target"] = {
+                            "type": "intersector",
+                            "candle_number": idx,
+                            "low": price,
+                            "x": x,
+                            "y": low_y,
+                            "is_first": True,
+                            "marker": "star"
+                        }
+                        reason = f"Drew PL-to-PL trendline from sender (candle {sender_idx}, low {sender_low}, x={sender_x}, y={sender_y}) to first intersector (candle {idx}, low {price}, x={x}, y={low_y}, marker=star) as only one intersector found"
+                    elif len(intersectors) == 2:
+                        # Case 3: First and second intersectors, keep sender to second intersector trendline
+                        idx, x, y, price, is_first, high_y, low_y = intersectors[0]
+                        # Draw star marker for first intersector
+                        star_points = [
+                            [x, low_y - 15], [x + 4, low_y - 5], [x + 14, low_y - 5], [x + 5, low_y + 2],
+                            [x + 10, low_y + 12], [x, low_y + 7], [x - 10, low_y + 12], [x - 5, low_y + 2],
+                            [x - 14, low_y - 5], [x - 4, low_y - 5]
+                        ]
+                        cv2.fillPoly(img, [np.array(star_points)], color=(0, 255, 255))  # Yellow in BGR
+                        team_data["intersectors"].append({
+                            "candle_number": idx,
+                            "low": price,
+                            "x": x,
+                            "y": low_y,
+                            "is_first": True,
+                            "marker": "star"
+                        })
+                        # Draw trendline to second intersector
+                        second_idx, second_x, second_y, _, _, _, second_low_y = intersectors[1]
+                        second_low = candle_bounds[second_idx]["low"]
+                        cv2.line(img, (sender_x, sender_y), (second_x, second_low_y), color=(0, 255, 255), thickness=1)  # Yellow in BGR
+                        cv2.circle(img, (second_x, second_y), 5, color=(0, 255, 255), thickness=-1)  # Yellow circle
+                        team_data["intersectors"].append({
+                            "candle_number": second_idx,
+                            "low": None,
+                            "x": second_x,
+                            "y": second_y,
+                            "is_first": False,
+                            "marker": "circle"
+                        })
+                        team_data["target"] = {
+                            "type": "intersector",
+                            "candle_number": second_idx,
+                            "low": second_low,
+                            "x": second_x,
+                            "y": second_low_y,
+                            "is_first": False,
+                            "marker": "circle"
+                        }
+                        reason = f"Drew PL-to-PL trendline from sender (candle {sender_idx}, low {sender_low}, x={sender_x}, y={sender_y}) to second intersector (candle {second_idx}, low {second_low}, x={second_x}, y={second_low_y}, marker=circle) as only two intersectors found"
+                    elif len(intersectors) >= 3:
+                        # Case 4: Three intersectors, keep sender to lowest low of 2nd or 3rd intersector
+                        idx, x, y, price, is_first, high_y, low_y = intersectors[0]
+                        # Draw star marker for first intersector
+                        star_points = [
+                            [x, low_y - 15], [x + 4, low_y - 5], [x + 14, low_y - 5], [x + 5, low_y + 2],
+                            [x + 10, low_y + 12], [x, low_y + 7], [x - 10, low_y + 12], [x - 5, low_y + 2],
+                            [x - 14, low_y - 5], [x - 4, low_y - 5]
+                        ]
+                        cv2.fillPoly(img, [np.array(star_points)], color=(0, 255, 255))  # Yellow in BGR
+                        team_data["intersectors"].append({
+                            "candle_number": idx,
+                            "low": price,
+                            "x": x,
+                            "y": low_y,
+                            "is_first": True,
+                            "marker": "star"
+                        })
+                        # Compare 2nd and 3rd intersectors
+                        second_idx, second_x, second_y, _, _, _, second_low_y = intersectors[1]
+                        third_idx, third_x, third_y, _, _, _, third_low_y = intersectors[2]
+                        second_low = candle_bounds[second_idx]["low"]
+                        third_low = candle_bounds[third_idx]["low"]
+                        if second_low < third_low:
+                            # Keep trendline to second intersector
+                            cv2.line(img, (sender_x, sender_y), (second_x, second_low_y), color=(0, 255, 255), thickness=1)  # Yellow in BGR
+                            cv2.circle(img, (second_x, second_y), 5, color=(0, 255, 255), thickness=-1)  # Yellow circle
+                            # Draw chevron up at second intersector's low
+                            chevron_points = np.array([
+                                [second_x - 10, second_low_y + 10],  # Left bottom
+                                [second_x, second_low_y],            # Center top
+                                [second_x + 10, second_low_y + 10]   # Right bottom
+                            ])
+                            cv2.fillPoly(img, [chevron_points], color=(0, 255, 255))  # Yellow in BGR
+                            team_data["intersectors"].append({
+                                "candle_number": second_idx,
+                                "low": None,
+                                "x": second_x,
+                                "y": second_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            })
+                            team_data["intersectors"].append({
+                                "candle_number": third_idx,
+                                "low": None,
+                                "x": third_x,
+                                "y": third_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            })
+                            team_data["target"] = {
+                                "type": "intersector",
+                                "candle_number": second_idx,
+                                "low": second_low,
+                                "x": second_x,
+                                "y": second_low_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            }
+                            reason = f"Drew PL-to-PL trendline from sender (candle {sender_idx}, low {sender_low}, x={sender_x}, y={sender_y}) to second intersector (candle {second_idx}, low {second_low}, x={second_x}, y={second_low_y}, marker=circle) as it has lower low than third intersector (candle {third_idx}, low {third_low})"
+                            trendline_log.append({
+                                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                                "symbol": symbol,
+                                "timeframe": timeframe_str,
+                                "team_type": "PL-intersector-compare",
+                                "status": "success",
+                                "reason": f"Marked 2nd intersector (candle {second_idx}, low {second_low}, x={second_x}, y={second_low_y}) with chevron up as it has lower low than 3rd intersector (candle {third_idx}, low {third_low})",
+                                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                            })
+                        else:
+                            # Keep trendline to third intersector
+                            cv2.line(img, (sender_x, sender_y), (third_x, third_low_y), color=(0, 255, 255), thickness=1)  # Yellow in BGR
+                            cv2.circle(img, (third_x, third_y), 5, color=(0, 255, 255), thickness=-1)  # Yellow circle
+                            # Draw chevron up at third intersector's low
+                            chevron_points = np.array([
+                                [third_x - 10, third_low_y + 10],  # Left bottom
+                                [third_x, third_low_y],            # Center top
+                                [third_x + 10, third_low_y + 10]   # Right bottom
+                            ])
+                            cv2.fillPoly(img, [chevron_points], color=(0, 255, 255))  # Yellow in BGR
+                            team_data["intersectors"].append({
+                                "candle_number": second_idx,
+                                "low": None,
+                                "x": second_x,
+                                "y": second_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            })
+                            team_data["intersectors"].append({
+                                "candle_number": third_idx,
+                                "low": None,
+                                "x": third_x,
+                                "y": third_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            })
+                            team_data["target"] = {
+                                "type": "intersector",
+                                "candle_number": third_idx,
+                                "low": third_low,
+                                "x": third_x,
+                                "y": third_low_y,
+                                "is_first": False,
+                                "marker": "circle"
+                            }
+                            reason = f"Drew PL-to-PL trendline from sender (candle {sender_idx}, low {sender_low}, x={sender_x}, y={sender_y}) to third intersector (candle {third_idx}, low {third_low}, x={third_x}, y={third_low_y}, marker=circle) as it has lower low than second intersector (candle {second_idx}, low {second_low})"
+                            trendline_log.append({
+                                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                                "symbol": symbol,
+                                "timeframe": timeframe_str,
+                                "team_type": "PL-intersector-compare",
+                                "status": "success",
+                                "reason": f"Marked 3rd intersector (candle {third_idx}, low {third_low}, x={third_x}, y={third_low_y}) with chevron up as it has lower low than 2nd intersector (candle {second_idx}, low {second_low})",
+                                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                            })
+
+                    trendline_log.append({
+                        "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                        "symbol": symbol,
+                        "timeframe": timeframe_str,
+                        "team_type": "PL-to-PL",
+                        "status": "success",
+                        "reason": reason,
+                        "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                    })
+                    pl_teams.append(team_data)
+                    pl_additional_trendlines.append(team_data["target"])  # Store only the kept trendline
+
+                    # Skip to the candle after the receiver
+                    i = next((k for k, (idx, _) in enumerate(sorted_pl) if idx == best_receiver_idx), i + 1) + 1
+                else:
+                    error_log.append({
+                        "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                        "error": f"Missing contour positions for PL sender (candle {sender_idx}) or receiver (candle {best_receiver_idx})",
+                        "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                    })
+                    i += 1
+            else:
+                trendline_log.append({
+                    "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                    "symbol": symbol,
+                    "timeframe": timeframe_str,
+                    "team_type": "PL-to-PL",
+                    "status": "skipped",
+                    "reason": f"No valid PL receiver found for sender low {sender_low} (candle {sender_idx})",
+                    "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                })
+                i += 1
+
+        # Save the image with contours, PH/PL markers, trendlines, intersector markers, and chevron markers
+        cv2.imwrite(output_image_path, img)
+        log_and_print(f"Chart with colored contours (dim green for up, red for down), PH/PL markers (blue for PH, purple for PL), single trendline per team (blue for PH-to-PH to highest high of 2nd/3rd intersector or first intersector or receiver, yellow for PL-to-PL to lowest low of 2nd/3rd intersector or first intersector or receiver), intersector markers (blue star for PH first, blue circle for PH subsequent, yellow star for PL first, yellow circle for PL subsequent), and chevron markers (blue chevron down for highest high between 2nd and 3rd PH intersectors, yellow chevron up for lowest low between 2nd and 3rd PL intersectors) saved for {symbol} ({timeframe_str}) at {output_image_path}", "SUCCESS")
+
+        # Save the contour counts and trendline data to JSON
+        contour_data = {
+            "total_count": total_count,
+            "green_candle_count": green_count,
+            "red_candle_count": red_count,
+            "candle_contours": [],
+            "ph_teams": ph_teams,
+            "pl_teams": pl_teams,
+            "ph_additional_trendlines": ph_additional_trendlines,
+            "pl_additional_trendlines": pl_additional_trendlines
+        }
+        for i, contour in enumerate(all_contours):
+            x, y, w, h = cv2.boundingRect(contour)
+            candle_type = "green" if green_mask[y + h // 2, x + w // 2] > 0 else "red" if red_mask[y + h // 2, x + w // 2] > 0 else "unknown"
+            contour_data["candle_contours"].append({
+                "candle_number": i,
+                "type": candle_type,
+                "x": x + w // 2,
+                "y": y,
+                "width": w,
+                "height": h,
+                "is_ph": i in ph_indices,
+                "is_pl": i in pl_indices
+            })
+
+        try:
+            with open(contour_json_path, 'w') as f:
+                json.dump(contour_data, f, indent=4)
+            log_and_print(f"Contour count and trendline data saved for {symbol} ({timeframe_str}) at {contour_json_path} with total_count={total_count} (green={green_count}, red={red_count}, PH={len(ph_indices)}, PL={len(pl_indices)}, PH_teams={len(ph_teams)}, PL_teams={len(pl_teams)}, PH_additional_trendlines={len(ph_additional_trendlines)}, PL_additional_trendlines={len(pl_additional_trendlines)})", "SUCCESS")
+        except Exception as e:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to save contour count for {symbol} ({timeframe_str}): {str(e)}",
+                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+            })
+            save_errors(error_log)
+            log_and_print(f"Failed to save contour count for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
+
+        # Save trendline log
+        try:
+            trendline_log.insert(0, {
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "symbol": symbol,
+                "timeframe": timeframe_str,
+                "team_type": "initial",
+                "status": "info",
+                "reason": f"Found {len(ph_indices)} PH points and {len(pl_indices)} PL points",
+                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+            })
+            with open(trendline_log_json_path, 'w') as f:
+                json.dump(trendline_log, f, indent=4)
+            log_and_print(f"Trendline log saved for {symbol} ({timeframe_str}) at {trendline_log_json_path}", "SUCCESS")
+        except Exception as e:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to save trendline log for {symbol} ({timeframe_str}): {str(e)}",
+                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+            })
+            save_errors(error_log)
+            log_and_print(f"Failed to save trendline log for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
+
+        log_and_print(f"Detected {total_count} candle contours for {symbol} ({timeframe_str}) (green={green_count}, red={red_count}), counted from newest to oldest, with {len(ph_indices)} PH and {len(pl_indices)} PL marked, {len(ph_teams)} PH-to-PH teams, {len(pl_teams)} PL-to-PL teams, {len(ph_additional_trendlines)} PH-to-PH trendlines (single trendline to highest high of 2nd/3rd intersector or first intersector or receiver), {len(pl_additional_trendlines)} PL-to-PL trendlines (single trendline to lowest low of 2nd/3rd intersector or first intersector or receiver), and chevron markers for highest high (PH) and lowest low (PL) between 2nd and 3rd intersectors", "INFO")
+
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to detect contours or draw trendlines for {symbol} ({timeframe_str}) in chart.png: {str(e)}",
+            "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+        })
+        save_errors(error_log)
+        log_and_print(f"Failed to detect contours or draw trendlines for {symbol} ({timeframe_str}) in chart.png: {str(e)}", "ERROR")
+
+    return error_log
+    
+def crop_chart(chart_path, symbol, timeframe_str, timeframe_folder):
+    """Crop the saved chart.png and chartanalysed.png images, then detect candle contours only for chart.png."""
+    error_log = []
+    chart_analysed_path = os.path.join(timeframe_folder, "chartanalysed.png")
+
+    try:
+        # Crop chart.png
+        with Image.open(chart_path) as img:
+            right = 8
+            left = 80
+            top = 80
+            bottom = 70
+            crop_box = (left, top, img.width - right, img.height - bottom)
+            cropped_img = img.crop(crop_box)
+            cropped_img.save(chart_path, "PNG")
+            log_and_print(f"Chart cropped for {symbol} ({timeframe_str}) at {chart_path}", "SUCCESS")
+
+        # Detect contours for chart.png only
+        contour_errors = detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder)
+        error_log.extend(contour_errors)
+
+        # Crop chartanalysed.png if it exists
+        if os.path.exists(chart_analysed_path):
+            with Image.open(chart_analysed_path) as img:
+                crop_box = (left, top, img.width - right, img.height - bottom)
+                cropped_img = img.crop(crop_box)
+                cropped_img.save(chart_analysed_path, "PNG")
+                log_and_print(f"Analysed chart cropped for {symbol} ({timeframe_str}) at {chart_analysed_path}", "SUCCESS")
+        else:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"chartanalysed.png not found for {symbol} ({timeframe_str})",
+                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+            })
+            log_and_print(f"chartanalysed.png not found for {symbol} ({timeframe_str})", "WARNING")
+
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to crop charts for {symbol} ({timeframe_str}): {str(e)}",
+            "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+        })
+        save_errors(error_log)
+        log_and_print(f"Failed to crop charts for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
+
+    return error_log
+  
+
+def fetch_charts_all_brokers(
+    bars,
+    neighborcandles_left,
+    neighborcandles_right
+):
+    """Main function to fetch OHLCV data, save charts, crop them, apply arrow detection, and save candle details."""
+    error_log = []
+    log_and_print("Starting chart generation process for all brokers with their respective symbols", "INFO")
+
+    # Clear chart folders for all brokers
+    for broker_name, config in brokersdictionary.items():
+        log_and_print(f"Clearing chart folder for broker: {broker_name}", "INFO")
+        success_clear, clear_errors = clear_chart_folder(config["BASE_FOLDER"])
+        error_log.extend(clear_errors)
+        if not success_clear:
+            log_and_print(f"Failed to clear chart folder for {broker_name}, continuing", "ERROR")
+
+    # Get symbols for each broker
+    broker_symbols = {}
+    for broker_name, config in brokersdictionary.items():
+        log_and_print(f"Initializing MT5 for broker: {broker_name}", "INFO")
+        success, init_errors = initialize_mt5(
+            config["TERMINAL_PATH"],
+            config["LOGIN_ID"],
+            config["PASSWORD"],
+            config["SERVER"]
+        )
+        error_log.extend(init_errors)
+        if not success:
+            log_and_print(f"MT5 initialization failed for {broker_name}, skipping", "ERROR")
+            mt5.shutdown()
+            continue
+
+        symbols, sym_errors = get_symbols()
+        error_log.extend(sym_errors)
+        broker_symbols[broker_name] = sorted(list(symbols))
+        mt5.shutdown()
+        log_and_print(f"Retrieved {len(symbols)} symbols for {broker_name}", "INFO")
+
+    if not broker_symbols:
+        log_and_print("No symbols retrieved from any broker, aborting", "ERROR")
+        save_errors(error_log)
+        return False
+
+    # Initialize remaining symbols for each broker
+    remaining_symbols = {broker: symbols.copy() for broker, symbols in broker_symbols.items()}
+    brokers = list(broker_symbols.keys())
+    broker_indices = {broker: 0 for broker in brokers}
+
+    # Process symbols in a round-robin fashion
+    while any(remaining_symbols[broker] for broker in brokers):
+        for broker_name in brokers:
+            if not remaining_symbols[broker_name]:
+                continue
+
+            log_and_print(f"{broker_name}", "INFO")
+            log_and_print("")
+            log_and_print(f"Processing next symbol for broker: {broker_name}", "INFO")
+            current_index = broker_indices[broker_name]
+            if current_index >= len(remaining_symbols[broker_name]):
+                continue
+            symbol = remaining_symbols[broker_name][current_index]
+
+            config = brokersdictionary[broker_name]
+            success, init_errors = initialize_mt5(
+                config["TERMINAL_PATH"],
+                config["LOGIN_ID"],
+                config["PASSWORD"],
+                config["SERVER"]
+            )
+            error_log.extend(init_errors)
+            if not success:
+                log_and_print(f"MT5 initialization failed for {broker_name} while processing {symbol}, skipping", "ERROR")
+                mt5.shutdown()
+                continue
+
+            log_and_print(f"Processing symbol {symbol} for broker: {broker_name}", "INFO")
+            symbol_folder = os.path.join(config["BASE_FOLDER"], symbol.replace(' ', '_'))
+            os.makedirs(symbol_folder, exist_ok=True)
+
+            for timeframe_str, mt5_timeframe in TIMEFRAME_MAP.items():
+                log_and_print(f"Processing timeframe: {timeframe_str} for {symbol}", "INFO")
+                timeframe_folder = os.path.join(symbol_folder, timeframe_str)
+                os.makedirs(timeframe_folder, exist_ok=True)
+
+                df, data_errors = fetch_ohlcv_data(symbol, mt5_timeframe, bars)
+                error_log.extend(data_errors)
+                if df is None:
+                    continue
+
+                df['symbol'] = symbol
+                # Generate chart and get PH/PL labels
+                chart_path, chart_errors, ph_labels, pl_labels = generate_and_save_chart(
+                    df, symbol, timeframe_str, timeframe_folder,
+                    neighborcandles_left, neighborcandles_right
+                )
+                error_log.extend(chart_errors)
+
+                # Save candle data with PH/PL labels
+                candle_errors = save_candle_data(df, symbol, timeframe_str, timeframe_folder, ph_labels, pl_labels)
+                error_log.extend(candle_errors)
+
+                if chart_path:
+                    crop_errors = crop_chart(chart_path, symbol, timeframe_str, timeframe_folder)
+                    error_log.extend(crop_errors)
+                log_and_print("", "INFO")
+
+            mt5.shutdown()
+            log_and_print("", "INFO")
+            broker_indices[broker_name] += 1
+            if broker_indices[broker_name] < len(remaining_symbols[broker_name]):
+                remaining_symbols[broker_name][broker_indices[broker_name]]
+            else:
+                remaining_symbols[broker_name] = []
+
+    save_errors(error_log)
+    log_and_print("Chart generation process completed for all brokers with their respective symbols", "SUCCESS")
+    return len(error_log) == 0
+
+if __name__ == "__main__":
+    success = fetch_charts_all_brokers(
+        bars=251,
+        neighborcandles_left=10,
+        neighborcandles_right=15
+    )
+    if success:
+        log_and_print("Chart generation, cropping, arrow detection, PH/PL analysis, and candle data saving completed successfully for all brokers!", "SUCCESS")
+    else:
+        log_and_print("Process failed. Check error log for details.", "ERROR")
+        

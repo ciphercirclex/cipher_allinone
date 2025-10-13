@@ -1,0 +1,62 @@
+i want the detect candles contour functions to  follow these rules below and draw trendlines , ph intercepted and non intercepted order blocks , pl intercepted and non intercepted orderblocks, the height thresold should be in pixels calculation since  it deals with png, set height thresold to 2px , 
+
+Rules for PH to PH Team (Bearish Trendlines, Breakouts, and Order Blocks)Team Formation (PH Sender to PH Receiver):Identify a Parent High (PH) as the sender (a high point higher than neighboring candles).
+Find the next PH as the receiver, ensuring its price is lower than the sender's high price (minus a small tolerance).
+The price difference between sender and receiver must exceed a minimum height distance and a next receiver height threshold to ensure significance.
+Skip if no valid receiver is found or if the receiver's price is not lower than the sender's price.
+
+Order Block Check:Locate the most recent Parent Low (PL) before the receiver's time.
+Ensure the PL's high price is below the receiver's high price to validate the team.
+The PL must occur after the sender's time to avoid invalid order blocks (banned teams).
+If the PL's time is before or at the sender's time, mark the team as banned and skip.
+
+Trendline Drawing:Draw a bearish trendline from the sender PH to the receiver PH, extending forward to the latest candle.
+The trendline represents a potential resistance level sloping downward.
+
+Breakout Detection:Check for a breakout by finding a subsequent PH (after the receiver) with a high price higher than the receiver's high price.
+Mark the breakout at the time and price where this PH occurs, indicating a potential reversal or weakening of the bearish trend.
+
+Order Block Identification:Use the high price of the most recent PL (before the receiver) as the order block level (potential buy limit zone).
+If a breakout is detected, check candles after the breakout time:If any candle's low touches or crosses the order block level, mark the order block as invalid (draw in red).
+If no candles touch the order block level, mark it as a free order block (potential buy limit, drawn in blue).
+
+Logging and Output:Log each team’s details (sender/receiver times and prices, status, and reason for skipping/banning).
+Save valid order blocks to a JSON file with order type ("buy_limit"), entry price, and order block time.
+Save banned teams to a separate JSON file for reference.
+Draw the trendline (green), order block (blue if free, red if invalid), and breakout markers (red) on the chart.
+
+Rules for PL to PL Team (Bullish Trendlines, Breakouts, and Order Blocks)Team Formation (PL Sender to PL Receiver):Identify a Parent Low (PL) as the sender (a low point lower than neighboring candles).
+Find the next PL as the receiver, ensuring its price is higher than the sender's low price (plus a small tolerance).
+The price difference between sender and receiver must exceed a minimum height distance and a next receiver height threshold to ensure significance.
+Skip if no valid receiver is found or if the receiver's price is not higher than the sender's price.
+
+Order Block Check:Locate the most recent Parent High (PH) before the receiver's time.
+Ensure the PH's low price is above the receiver's low price to validate the team.
+The PH must occur after the sender's time to avoid invalid order blocks (banned teams).
+If the PH's time is before or at the sender's time, mark the team as banned and skip.
+
+Trendline Drawing:Draw a bullish trendline from the sender PL to the receiver PL, extending forward to the latest candle.
+The trendline represents a potential support level sloping upward.
+
+Breakout Detection:Check for a breakout by finding a subsequent PL (after the receiver) with a low price lower than the receiver's low price.
+Mark the breakout at the time and price where this PL occurs, indicating a potential reversal or weakening of the bullish trend.
+
+Order Block Identification:Use the low price of the most recent PH (before the receiver) as the order block level (potential sell limit zone).
+If a breakout is detected, check candles after the breakout time:If any candle's high touches or crosses the order block level, mark the order block as invalid (draw in red).
+If no candles touch the order block level, mark it as a free order block (potential sell limit, drawn in purple).
+
+Logging and Output:Log each team’s details (sender/receiver times and prices, status, and reason for skipping/banning).
+Save valid order blocks to a JSON file with order type ("sell_limit"), entry price, and order block time.
+Save banned teams to a separate JSON file for reference.
+Draw the trendline (red), order block (purple if free, red if invalid), and breakout markers (red) on the chart.
+
+General Notes for AI Implementation:PH to PH Teams focus on bearish setups (downward trendlines, buy limit order blocks).
+PL to PL Teams focus on bullish setups (upward trendlines, sell limit order blocks).
+Ensure all price comparisons account for a small tolerance to handle minor price fluctuations.
+Use market-specific parameters (height distance, next receiver height threshold) based on whether the symbol is forex, stock, or other.
+Save all outputs (charts, JSON logs, order blocks) to the specified timeframe folder for each symbol and broker.
+Maintain a consistent color scheme: green for PH trendlines, red for PL trendlines, blue for buy order blocks, purple for sell order blocks, red for invalid order blocks and breakouts.
+
+
+
+now provide and write these rules accordingly for the detect candles contour to follow, trendline must be drawn and set the height thresold to be 1px distanced from chart to each other 
