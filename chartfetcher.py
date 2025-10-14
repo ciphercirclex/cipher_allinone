@@ -457,34 +457,16 @@ def generate_and_save_chart(df, symbol, timeframe_str, timeframe_folder, neighbo
         log_and_print(f"Failed to save charts for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
         return chart_path if os.path.exists(chart_path) else None, error_log, [], []
 
-def draw_dashed_line(img, start_point, end_point, color=(0, 0, 0), thickness=1, dash_length=10, gap_length=10):
-    """Draw a dashed line on the image from start_point to end_point."""
-    x1, y1 = start_point
-    x2, y2 = end_point
-    # Calculate the length of the line
-    length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-    if length == 0:
-        return
-    # Calculate the unit vector
-    dx = (x2 - x1) / length
-    dy = (y2 - y1) / length
-    # Draw dashes
-    current_length = 0
-    while current_length < length:
-        start_x = int(x1 + dx * current_length)
-        start_y = int(y1 + dy * current_length)
-        end_x = int(x1 + dx * min(current_length + dash_length, length))
-        end_y = int(y1 + dy * min(current_length + dash_length, length))
-        cv2.line(img, (start_x, start_y), (end_x, end_y), color, thickness)
-        current_length += dash_length + gap_length
-
-def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, candleafterintersector=2, minbreakoutcandleposition=5):
+def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, candleafterintersector=2, minbreakoutcandleposition=5, startOBsearchFrom=0, minOBleftneighbor=1, minOBrightneighbor=1, reversal_leftcandle=0, reversal_rightcandle=0):
     error_log = []
     contour_json_path = os.path.join(timeframe_folder, "chart_contours.json")
     trendline_log_json_path = os.path.join(timeframe_folder, "trendline_log.json")
+    ob_none_oi_json_path = os.path.join(timeframe_folder, "ob_none_oi_data.json")
     output_image_path = os.path.join(timeframe_folder, "chart_with_contours.png")
     candle_json_path = os.path.join(timeframe_folder, "all_candles.json")
     trendline_log = []
+    ob_none_oi_data = []
+    team_counter = 1  # Counter for naming teams (team1, team2, ...)
 
     def draw_chevron_arrow(img, x, y, direction, color=(0, 0, 255), line_length=15, chevron_size=8):
         """
@@ -505,6 +487,83 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
             cv2.line(img, (x, y), (x, top_y), color, thickness=1)
             cv2.line(img, (x - chevron_size // 2, top_y - chevron_size // 2), (x, top_y), color, thickness=1)
             cv2.line(img, (x + chevron_size // 2, top_y - chevron_size // 2), (x, top_y), color, thickness=1)
+
+    def draw_right_arrow(img, x, y, oi_x=None, color=(255, 0, 0), line_length=15, arrow_size=8):
+        """
+        Draw a right-facing arrow on the image at position (x, y).
+        If oi_x is provided, extend the arrow to touch the 'oi' candle's body at x=oi_x with red color.
+        If oi_x is None, extend the arrow to the right edge of the image.
+        color: BGR tuple, default red (255, 0, 0) when oi_x is provided.
+        line_length: Length of the horizontal line in pixels (default 15 if oi_x is None and not extending to edge).
+        arrow_size: Size of the arrowhead (distance from center to each wing tip) in pixels.
+        """
+        img_height, img_width = img.shape[:2]
+        if oi_x is not None:
+            line_length = max(10, oi_x - x)
+            end_x = oi_x
+            color = (255, 0, 0)
+        else:
+            end_x = img_width - 5
+            color = (0, 255, 0)
+        cv2.line(img, (x, y), (end_x, y), color, thickness=1)
+        cv2.line(img, (end_x - arrow_size // 2, y - arrow_size // 2), (end_x, y), color, thickness=1)
+        cv2.line(img, (end_x - arrow_size // 2, y + arrow_size // 2), (end_x, y), color, thickness=1)
+
+    def draw_oi_marker(img, x, y, color=(0, 255, 0)):
+        """
+        Draw an 'oi' marker (e.g., a green circle with a different radius) at position (x, y).
+        """
+        cv2.circle(img, (x, y), 7, color, thickness=1)
+
+    def find_reversal_candle(start_idx, is_ph):
+        """
+        Find the first candle after start_idx where:
+        - For PL team: low is lower than specified left and right neighbors.
+        - For PH team: high is higher than specified left and right neighbors.
+        Returns (index, x, y) or None if no such candle is found.
+        """
+        for idx in range(start_idx - 1, -1, -1):
+            if idx not in candle_bounds:
+                continue
+            left_neighbors = []
+            right_neighbors = []
+            if reversal_leftcandle in [0, 1]:
+                if idx - 1 in candle_bounds:
+                    left_neighbors.append(idx - 1)
+            elif reversal_leftcandle == 2:
+                if idx - 1 in candle_bounds and idx - 2 in candle_bounds:
+                    left_neighbors.extend([idx - 1, idx - 2])
+            if reversal_rightcandle in [0, 1]:
+                if idx + 1 in candle_bounds:
+                    right_neighbors.append(idx + 1)
+            elif reversal_rightcandle == 2:
+                if idx + 1 in candle_bounds and idx + 2 in candle_bounds:
+                    right_neighbors.extend([idx + 1, idx + 2])
+            if len(left_neighbors) < max(1, reversal_leftcandle) or len(right_neighbors) < max(1, reversal_rightcandle):
+                continue
+            current_candle = candle_bounds[idx]
+            all_neighbors_valid = True
+            if is_ph:
+                for neighbor_idx in left_neighbors + right_neighbors:
+                    neighbor_candle = candle_bounds[neighbor_idx]
+                    if current_candle["high"] <= neighbor_candle["high"]:
+                        all_neighbors_valid = False
+                        break
+                if all_neighbors_valid:
+                    x = current_candle["x_left"] + (current_candle["x_right"] - current_candle["x_left"]) // 2
+                    y = current_candle["high_y"] - 10
+                    return idx, x, y
+            else:
+                for neighbor_idx in left_neighbors + right_neighbors:
+                    neighbor_candle = candle_bounds[neighbor_idx]
+                    if current_candle["low"] >= neighbor_candle["low"]:
+                        all_neighbors_valid = False
+                        break
+                if all_neighbors_valid:
+                    x = current_candle["x_left"] + (current_candle["x_right"] - current_candle["x_left"]) // 2
+                    y = current_candle["low_y"] + 10
+                    return idx, x, y
+        return None
 
     try:
         img = cv2.imread(chart_path)
@@ -678,20 +737,84 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                         return i
             return None
 
-        def find_first_body_intersection(start_idx, start_y, price, is_ph):
-            for idx in range(start_idx - 1, -1, -1):
+        def find_OB(start_idx, receiver_idx, is_ph):
+            """
+            Find the first candle from start_idx + startOBsearchFrom to receiver_idx where its high (for PH) is higher than
+            specified left and right neighbors, or its low (for PL) is lower than specified neighbors.
+            Returns (index, x, y) or None if no such candle is found.
+            """
+            start_search = start_idx + max(1, startOBsearchFrom)
+            end_search = receiver_idx
+            for idx in range(start_search, end_search + 1):
                 if idx not in candle_bounds:
                     continue
-                bounds = candle_bounds[idx]
+                left_neighbors = []
+                right_neighbors = []
+                if minOBleftneighbor in [0, 1]:
+                    if idx - 1 in candle_bounds:
+                        left_neighbors.append(idx - 1)
+                elif minOBleftneighbor == 2:
+                    if idx - 1 in candle_bounds and idx - 2 in candle_bounds:
+                        left_neighbors.extend([idx - 1, idx - 2])
+                if minOBrightneighbor in [0, 1]:
+                    if idx + 1 in candle_bounds:
+                        right_neighbors.append(idx + 1)
+                elif minOBrightneighbor == 2:
+                    if idx + 1 in candle_bounds and idx + 2 in candle_bounds:
+                        right_neighbors.extend([idx + 1, idx + 2])
+                if len(left_neighbors) < max(1, minOBleftneighbor) or len(right_neighbors) < max(1, minOBrightneighbor):
+                    continue
+                current_candle = candle_bounds[idx]
+                all_neighbors_valid = True
                 if is_ph:
-                    if bounds["body_top_y"] <= start_y <= bounds["body_bottom_y"]:
-                        return idx, bounds["x_left"], start_y
+                    for neighbor_idx in left_neighbors + right_neighbors:
+                        neighbor_candle = candle_bounds[neighbor_idx]
+                        if current_candle["high"] <= neighbor_candle["high"]:
+                            all_neighbors_valid = False
+                            break
+                    if all_neighbors_valid:
+                        x = current_candle["x_left"] + (current_candle["x_right"] - current_candle["x_left"]) // 2
+                        y = current_candle["high_y"]
+                        return idx, x, y
                 else:
-                    if bounds["body_top_y"] <= start_y <= bounds["body_bottom_y"]:
-                        return idx, bounds["x_left"], start_y
+                    for neighbor_idx in left_neighbors + right_neighbors:
+                        neighbor_candle = candle_bounds[neighbor_idx]
+                        if current_candle["low"] >= neighbor_candle["low"]:
+                            all_neighbors_valid = False
+                            break
+                    if all_neighbors_valid:
+                        x = current_candle["x_left"] + (current_candle["x_right"] - current_candle["x_left"]) // 2
+                        y = current_candle["low_y"]
+                        return idx, x, y
             return None
 
-        # Process PH-to-PH trendlines
+        def find_oi_candle(reversal_idx, ob_idx, is_ph):
+            """
+            Find the first candle after reversal_idx where:
+            - For PH team: low is lower than the high of the OB candle at ob_idx.
+            - For PL team: high is higher than the low of the OB candle at ob_idx.
+            Returns (index, x, y) or None if no such candle is found.
+            """
+            if ob_idx is None or ob_idx not in candle_bounds or reversal_idx is None or reversal_idx not in candle_bounds:
+                return None
+            reference_candle = candle_bounds[ob_idx]
+            reference_price = reference_candle["high"] if is_ph else reference_candle["low"]
+            for idx in range(reversal_idx - 1, -1, -1):
+                if idx not in candle_bounds:
+                    continue
+                current_candle = candle_bounds[idx]
+                if is_ph:
+                    if current_candle["low"] < reference_price:
+                        x = current_candle["x_left"] + (current_candle["x_right"] - current_candle["x_left"]) // 2
+                        y = current_candle["low_y"] + 10
+                        return idx, x, y
+                else:
+                    if current_candle["high"] > reference_price:
+                        x = current_candle["x_left"] + (current_candle["x_right"] - current_candle["x_left"]) // 2
+                        y = current_candle["low_y"] + 10
+                        return idx, x, y
+            return None
+
         ph_teams = []
         pl_teams = []
         ph_additional_trendlines = []
@@ -699,6 +822,7 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
         sorted_ph = sorted(ph_indices.items(), key=lambda x: x[0], reverse=True)
         sorted_pl = sorted(pl_indices.items(), key=lambda x: x[0], reverse=True)
 
+        # Process PH-to-PH trendlines
         i = 0
         while i < len(sorted_ph) - 1:
             sender_idx, sender_data = sorted_ph[i]
@@ -791,9 +915,7 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                                 selected_is_first = is_first
                                 selected_marker = "star" if is_first else "circle"
                             reason += f"; detected {'first' if is_first else 'subsequent'} intersector (candle {idx}, high {price if is_first else candle_bounds[idx]['high']}, x={x}, y={high_y}, marker={marker}, trendbreaker=False)"
-                    # Draw trendline and check breakout only for the selected trendline
                     if selected_type == "receiver" and not intersectors:
-                        # Find first breakout candle
                         first_breakout_idx = None
                         for check_idx in range(selected_idx - 1, -1, -1):
                             if check_idx in candle_bounds:
@@ -802,7 +924,6 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                                     next_candle["high"] > candle_bounds[selected_idx]["high"]):
                                     first_breakout_idx = check_idx
                                     break
-                        # Extend trendline to first breakout candle if found
                         end_x = selected_x
                         end_y = selected_y
                         if first_breakout_idx is not None and first_breakout_idx in candle_bounds:
@@ -828,7 +949,6 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                             "y": end_y
                         })
                         reason = f"Drew PH-to-PH trendline from sender (candle {sender_idx}, high {sender_high}, x={sender_x}, y={sender_y}) to receiver (candle {selected_idx}, high {selected_high}, x={end_x}, y={end_y}) as no intersectors found" + reason
-                        # Check for breakout candle for chevron arrow
                         if first_breakout_idx is not None:
                             start_idx = max(0, first_breakout_idx - minbreakoutcandleposition)
                             for check_idx in range(start_idx, -1, -1):
@@ -838,12 +958,49 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                                         next_candle["high"] > candle_bounds[selected_idx]["high"]):
                                         target_idx = check_idx
                                         target_x = candle_bounds[target_idx]["x_left"]
-                                        target_y = candle_bounds[target_idx]["high_y"] + 10  # Add offset for PH
-                                        draw_chevron_arrow(img, target_x + (candle_bounds[target_idx]["x_right"] - candle_bounds[target_idx]["x_left"]) // 2, target_y, 'up', color=(255, 0, 0))
+                                        target_y = candle_bounds[target_idx]["high_y"] + 10
+                                        draw_chevron_arrow(img, target_x + (candle_bounds[target_idx]["x_right"] - target_x) // 2, target_y, 'up', color=(255, 0, 0))
                                         reason += f"; for selected trendline to candle {selected_idx}, found first breakout candle {first_breakout_idx} (high={candle_bounds[first_breakout_idx]['high']}, low={candle_bounds[first_breakout_idx]['low']}), skipped {minbreakoutcandleposition} candles, selected target candle {target_idx} (high_y={target_y}, high={candle_bounds[target_idx]['high']}, low={candle_bounds[target_idx]['low']}) for blue chevron arrow at center x-axis with offset from high"
+                                        ob_result = find_OB(selected_idx, best_receiver_idx, is_ph=True)
+                                        if ob_result:
+                                            ob_idx, ob_x, ob_y = ob_result
+                                            reversal_result = find_reversal_candle(target_idx, is_ph=True)
+                                            oi_result = None
+                                            if reversal_result:
+                                                reversal_idx, _, _ = reversal_result
+                                                oi_result = find_oi_candle(reversal_idx, ob_idx, is_ph=True)
+                                            if oi_result:
+                                                oi_idx, oi_x, oi_y = oi_result
+                                                draw_right_arrow(img, ob_x, ob_y, oi_x=oi_x)
+                                                draw_oi_marker(img, oi_x, oi_y)
+                                                reason += f"; for PH intersector at candle {selected_idx}, found OB candle {ob_idx} with high higher than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}, marked with red right arrow at x={ob_x}, y={ob_y} extended to 'oi' candle {oi_idx} at x={oi_x}"
+                                                reason += f"; for PH team at candle {selected_idx}, found 'oi' candle {oi_idx} with low ({candle_bounds[oi_idx]['low']}) lower than high ({candle_bounds[ob_idx]['high']}) of OB candle {ob_idx} after reversal candle {reversal_idx}, marked with green circle (radius=7) at x={oi_x}, y={oi_y} below candle"
+                                            else:
+                                                draw_right_arrow(img, ob_x, ob_y)
+                                                ob_candle = next((c for c in candle_data if int(c["candle_number"]) == ob_idx), None)
+                                                ob_timestamp = ob_candle["time"] if ob_candle else datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00')
+                                                ob_none_oi_data.append({
+                                                    f"team{team_counter}": {
+                                                        "timestamp": ob_timestamp,
+                                                        "team_type": "PH-to-PH",
+                                                        "none_oi_x_OB_high_price": candle_bounds[ob_idx]["high"],
+                                                        "none_oi_x_OB_low_price": candle_bounds[ob_idx]["low"]
+                                                    }
+                                                })
+                                                team_counter += 1
+                                                reason += f"; for PH intersector at candle {selected_idx}, found OB candle {ob_idx} with high higher than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}, marked with green right arrow at x={ob_x}, y={ob_y} extended to right edge of image"
+                                                reason += f"; for PH team at candle {selected_idx}, no 'oi' candle found with low lower than high ({candle_bounds[ob_idx]['high']}) of OB candle {ob_idx} after reversal candle {reversal_idx if reversal_result else 'None'}"
+                                        else:
+                                            reason += f"; for PH intersector at candle {selected_idx}, no OB candle found with high higher than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}"
+                                        reversal_result = find_reversal_candle(target_idx, is_ph=True)
+                                        if reversal_result:
+                                            reversal_idx, reversal_x, reversal_y = reversal_result
+                                            draw_chevron_arrow(img, reversal_x, reversal_y, 'down', color=(0, 128, 0))
+                                            reason += f"; for PH team at candle {selected_idx}, found reversal candle {reversal_idx} with high ({candle_bounds[reversal_idx]['high']}) higher than {reversal_leftcandle} left and {reversal_rightcandle} right neighbors after target candle {target_idx}, marked with dim green downward chevron arrow at x={reversal_x}, y={reversal_y} above candle"
+                                        else:
+                                            reason += f"; for PH team at candle {selected_idx}, no reversal candle found with high higher than {reversal_leftcandle} left and {reversal_rightcandle} right neighbors after target candle {target_idx}"
                                         break
                     elif selected_type == "intersector":
-                        # Find first breakout candle
                         first_breakout_idx = None
                         for check_idx in range(selected_idx - 1, -1, -1):
                             if check_idx in candle_bounds:
@@ -852,7 +1009,6 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                                     next_candle["high"] > candle_bounds[selected_idx]["high"]):
                                     first_breakout_idx = check_idx
                                     break
-                        # Extend trendline to first breakout candle if found
                         end_x = selected_x
                         end_y = selected_y
                         if first_breakout_idx is not None and first_breakout_idx in candle_bounds:
@@ -894,7 +1050,6 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                             "marker": selected_marker
                         })
                         reason = f"Drew PH-to-PH trendline from sender (candle {sender_idx}, high {sender_high}, x={sender_x}, y={sender_y}) to intersector (candle {selected_idx}, high {selected_high}, x={end_x}, y={end_y}, marker={selected_marker}, trendbreaker=False) with lowest high" + reason
-                        # Check for breakout candle for chevron arrow
                         if first_breakout_idx is not None:
                             start_idx = max(0, first_breakout_idx - minbreakoutcandleposition)
                             for check_idx in range(start_idx, -1, -1):
@@ -904,9 +1059,47 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                                         next_candle["high"] > candle_bounds[selected_idx]["high"]):
                                         target_idx = check_idx
                                         target_x = candle_bounds[target_idx]["x_left"]
-                                        target_y = candle_bounds[target_idx]["high_y"] + 10  # Add offset for PH
+                                        target_y = candle_bounds[target_idx]["high_y"] + 10
                                         draw_chevron_arrow(img, target_x + (candle_bounds[target_idx]["x_right"] - target_x) // 2, target_y, 'up', color=(255, 0, 0))
                                         reason += f"; for selected trendline to candle {selected_idx}, found first breakout candle {first_breakout_idx} (high={candle_bounds[first_breakout_idx]['high']}, low={candle_bounds[first_breakout_idx]['low']}), skipped {minbreakoutcandleposition} candles, selected target candle {target_idx} (high_y={target_y}, high={candle_bounds[target_idx]['high']}, low={candle_bounds[target_idx]['low']}) for blue chevron arrow at center x-axis with offset from high"
+                                        ob_result = find_OB(selected_idx, best_receiver_idx, is_ph=True)
+                                        if ob_result:
+                                            ob_idx, ob_x, ob_y = ob_result
+                                            reversal_result = find_reversal_candle(target_idx, is_ph=True)
+                                            oi_result = None
+                                            if reversal_result:
+                                                reversal_idx, _, _ = reversal_result
+                                                oi_result = find_oi_candle(reversal_idx, ob_idx, is_ph=True)
+                                            if oi_result:
+                                                oi_idx, oi_x, oi_y = oi_result
+                                                draw_right_arrow(img, ob_x, ob_y, oi_x=oi_x)
+                                                draw_oi_marker(img, oi_x, oi_y)
+                                                reason += f"; for PH intersector at candle {selected_idx}, found OB candle {ob_idx} with high higher than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}, marked with red right arrow at x={ob_x}, y={ob_y} extended to 'oi' candle {oi_idx} at x={oi_x}"
+                                                reason += f"; for PH team at candle {selected_idx}, found 'oi' candle {oi_idx} with low ({candle_bounds[oi_idx]['low']}) lower than high ({candle_bounds[ob_idx]['high']}) of OB candle {ob_idx} after reversal candle {reversal_idx}, marked with green circle (radius=7) at x={oi_x}, y={oi_y} below candle"
+                                            else:
+                                                draw_right_arrow(img, ob_x, ob_y)
+                                                ob_candle = next((c for c in candle_data if int(c["candle_number"]) == ob_idx), None)
+                                                ob_timestamp = ob_candle["time"] if ob_candle else datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00')
+                                                ob_none_oi_data.append({
+                                                    f"team{team_counter}": {
+                                                        "timestamp": ob_timestamp,
+                                                        "team_type": "PH-to-PH",
+                                                        "none_oi_x_OB_high_price": candle_bounds[ob_idx]["high"],
+                                                        "none_oi_x_OB_low_price": candle_bounds[ob_idx]["low"]
+                                                    }
+                                                })
+                                                team_counter += 1
+                                                reason += f"; for PH intersector at candle {selected_idx}, found OB candle {ob_idx} with high higher than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}, marked with green right arrow at x={ob_x}, y={ob_y} extended to right edge of image"
+                                                reason += f"; for PH team at candle {selected_idx}, no 'oi' candle found with low lower than high ({candle_bounds[ob_idx]['high']}) of OB candle {ob_idx} after reversal candle {reversal_idx if reversal_result else 'None'}"
+                                        else:
+                                            reason += f"; for PH intersector at candle {selected_idx}, no OB candle found with high higher than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}"
+                                        reversal_result = find_reversal_candle(target_idx, is_ph=True)
+                                        if reversal_result:
+                                            reversal_idx, reversal_x, reversal_y = reversal_result
+                                            draw_chevron_arrow(img, reversal_x, reversal_y, 'down', color=(0, 128, 0))
+                                            reason += f"; for PH team at candle {selected_idx}, found reversal candle {reversal_idx} with high ({candle_bounds[reversal_idx]['high']}) higher than {reversal_leftcandle} left and {reversal_rightcandle} right neighbors after target candle {target_idx}, marked with dim green downward chevron arrow at x={reversal_x}, y={reversal_y} above candle"
+                                        else:
+                                            reason += f"; for PH team at candle {selected_idx}, no reversal candle found with high higher than {reversal_leftcandle} left and {reversal_rightcandle} right neighbors after target candle {target_idx}"
                                         break
                     else:
                         reason = f"No PH-to-PH trendline drawn from sender (candle {sender_idx}, high {sender_high}, x={sender_x}, y={sender_y}) as first intersector is trendbreaker" + reason
@@ -1033,9 +1226,7 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                                 selected_is_first = is_first
                                 selected_marker = "star" if is_first else "circle"
                             reason += f"; detected {'first' if is_first else 'subsequent'} intersector (candle {idx}, low {price if is_first else candle_bounds[idx]['low']}, x={x}, y={low_y}, marker={marker}, trendbreaker=False)"
-                    # Draw trendline and check breakout only for the selected trendline
                     if selected_type == "receiver" and not intersectors:
-                        # Find first breakout candle
                         first_breakout_idx = None
                         for check_idx in range(selected_idx - 1, -1, -1):
                             if check_idx in candle_bounds:
@@ -1044,7 +1235,6 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                                     next_candle["low"] < candle_bounds[selected_idx]["low"]):
                                     first_breakout_idx = check_idx
                                     break
-                        # Extend trendline to first breakout candle if found
                         end_x = selected_x
                         end_y = selected_y
                         if first_breakout_idx is not None and first_breakout_idx in candle_bounds:
@@ -1070,7 +1260,6 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                             "y": end_y
                         })
                         reason = f"Drew PL-to-PL trendline from sender (candle {sender_idx}, low {sender_low}, x={sender_x}, y={sender_y}) to receiver (candle {selected_idx}, low={selected_low}, x={end_x}, y={end_y}) as no intersectors found" + reason
-                        # Check for breakout candle for chevron arrow
                         if first_breakout_idx is not None:
                             start_idx = max(0, first_breakout_idx - minbreakoutcandleposition)
                             for check_idx in range(start_idx, -1, -1):
@@ -1080,12 +1269,49 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                                         next_candle["low"] < candle_bounds[selected_idx]["low"]):
                                         target_idx = check_idx
                                         target_x = candle_bounds[target_idx]["x_left"]
-                                        target_y = candle_bounds[target_idx]["low_y"] - 10  # Add offset for PL
+                                        target_y = candle_bounds[target_idx]["low_y"] - 10
                                         draw_chevron_arrow(img, target_x + (candle_bounds[target_idx]["x_right"] - target_x) // 2, target_y, 'down', color=(128, 0, 128))
                                         reason += f"; for selected trendline to candle {selected_idx}, found first breakout candle {first_breakout_idx} (high={candle_bounds[first_breakout_idx]['high']}, low={candle_bounds[first_breakout_idx]['low']}), skipped {minbreakoutcandleposition} candles, selected target candle {target_idx} (low_y={target_y}, high={candle_bounds[target_idx]['high']}, low={candle_bounds[target_idx]['low']}) for purple chevron arrow at center x-axis with offset from low"
+                                        ob_result = find_OB(selected_idx, best_receiver_idx, is_ph=False)
+                                        if ob_result:
+                                            ob_idx, ob_x, ob_y = ob_result
+                                            reversal_result = find_reversal_candle(target_idx, is_ph=False)
+                                            oi_result = None
+                                            if reversal_result:
+                                                reversal_idx, _, _ = reversal_result
+                                                oi_result = find_oi_candle(reversal_idx, ob_idx, is_ph=False)
+                                            if oi_result:
+                                                oi_idx, oi_x, oi_y = oi_result
+                                                draw_right_arrow(img, ob_x, ob_y, oi_x=oi_x)
+                                                draw_oi_marker(img, oi_x, oi_y)
+                                                reason += f"; for PL intersector at candle {selected_idx}, found OB candle {ob_idx} with low lower than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}, marked with red right arrow at x={ob_x}, y={ob_y} extended to 'oi' candle {oi_idx} at x={oi_x}"
+                                                reason += f"; for PL team at candle {selected_idx}, found 'oi' candle {oi_idx} with high ({candle_bounds[oi_idx]['high']}) higher than low ({candle_bounds[ob_idx]['low']}) of OB candle {ob_idx} after reversal candle {reversal_idx}, marked with green circle (radius=7) at x={oi_x}, y={oi_y} below candle"
+                                            else:
+                                                draw_right_arrow(img, ob_x, ob_y)
+                                                ob_candle = next((c for c in candle_data if int(c["candle_number"]) == ob_idx), None)
+                                                ob_timestamp = ob_candle["time"] if ob_candle else datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00')
+                                                ob_none_oi_data.append({
+                                                    f"team{team_counter}": {
+                                                        "timestamp": ob_timestamp,
+                                                        "team_type": "PL-to-PL",
+                                                        "none_oi_x_OB_high_price": candle_bounds[ob_idx]["high"],
+                                                        "none_oi_x_OB_low_price": candle_bounds[ob_idx]["low"]
+                                                    }
+                                                })
+                                                team_counter += 1
+                                                reason += f"; for PL intersector at candle {selected_idx}, found OB candle {ob_idx} with low lower than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}, marked with green right arrow at x={ob_x}, y={ob_y} extended to right edge of image"
+                                                reason += f"; for PL team at candle {selected_idx}, no 'oi' candle found with high higher than low ({candle_bounds[ob_idx]['low']}) of OB candle {ob_idx} after reversal candle {reversal_idx if reversal_result else 'None'}"
+                                        else:
+                                            reason += f"; for PL intersector at candle {selected_idx}, no OB candle found with low lower than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}"
+                                        reversal_result = find_reversal_candle(target_idx, is_ph=False)
+                                        if reversal_result:
+                                            reversal_idx, reversal_x, reversal_y = reversal_result
+                                            draw_chevron_arrow(img, reversal_x, reversal_y, 'up', color=(0, 0, 255))
+                                            reason += f"; for PL team at candle {selected_idx}, found reversal candle {reversal_idx} with low ({candle_bounds[reversal_idx]['low']}) lower than {reversal_leftcandle} left and {reversal_rightcandle} right neighbors after target candle {target_idx}, marked with red upward chevron arrow at x={reversal_x}, y={reversal_y} below candle"
+                                        else:
+                                            reason += f"; for PL team at candle {selected_idx}, no reversal candle found with low lower than {reversal_leftcandle} left and {reversal_rightcandle} right neighbors after target candle {target_idx}"
                                         break
                     elif selected_type == "intersector":
-                        # Find first breakout candle
                         first_breakout_idx = None
                         for check_idx in range(selected_idx - 1, -1, -1):
                             if check_idx in candle_bounds:
@@ -1094,7 +1320,6 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                                     next_candle["low"] < candle_bounds[selected_idx]["low"]):
                                     first_breakout_idx = check_idx
                                     break
-                        # Extend trendline to first breakout candle if found
                         end_x = selected_x
                         end_y = selected_y
                         if first_breakout_idx is not None and first_breakout_idx in candle_bounds:
@@ -1136,7 +1361,6 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                             "marker": selected_marker
                         })
                         reason = f"Drew PL-to-PL trendline from sender (candle {sender_idx}, low {sender_low}, x={sender_x}, y={sender_y}) to intersector (candle {selected_idx}, low={selected_low}, x={end_x}, y={end_y}, marker={selected_marker}, trendbreaker=False) with highest low" + reason
-                        # Check for breakout candle for chevron arrow
                         if first_breakout_idx is not None:
                             start_idx = max(0, first_breakout_idx - minbreakoutcandleposition)
                             for check_idx in range(start_idx, -1, -1):
@@ -1146,9 +1370,47 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                                         next_candle["low"] < candle_bounds[selected_idx]["low"]):
                                         target_idx = check_idx
                                         target_x = candle_bounds[target_idx]["x_left"]
-                                        target_y = candle_bounds[target_idx]["low_y"] - 10  # Add offset for PL
+                                        target_y = candle_bounds[target_idx]["low_y"] - 10
                                         draw_chevron_arrow(img, target_x + (candle_bounds[target_idx]["x_right"] - target_x) // 2, target_y, 'down', color=(128, 0, 128))
                                         reason += f"; for selected trendline to candle {selected_idx}, found first breakout candle {first_breakout_idx} (high={candle_bounds[first_breakout_idx]['high']}, low={candle_bounds[first_breakout_idx]['low']}), skipped {minbreakoutcandleposition} candles, selected target candle {target_idx} (low_y={target_y}, high={candle_bounds[target_idx]['high']}, low={candle_bounds[target_idx]['low']}) for purple chevron arrow at center x-axis with offset from low"
+                                        ob_result = find_OB(selected_idx, best_receiver_idx, is_ph=False)
+                                        if ob_result:
+                                            ob_idx, ob_x, ob_y = ob_result
+                                            reversal_result = find_reversal_candle(target_idx, is_ph=False)
+                                            oi_result = None
+                                            if reversal_result:
+                                                reversal_idx, _, _ = reversal_result
+                                                oi_result = find_oi_candle(reversal_idx, ob_idx, is_ph=False)
+                                            if oi_result:
+                                                oi_idx, oi_x, oi_y = oi_result
+                                                draw_right_arrow(img, ob_x, ob_y, oi_x=oi_x)
+                                                draw_oi_marker(img, oi_x, oi_y)
+                                                reason += f"; for PL intersector at candle {selected_idx}, found OB candle {ob_idx} with low lower than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}, marked with red right arrow at x={ob_x}, y={ob_y} extended to 'oi' candle {oi_idx} at x={oi_x}"
+                                                reason += f"; for PL team at candle {selected_idx}, found 'oi' candle {oi_idx} with high ({candle_bounds[oi_idx]['high']}) higher than low ({candle_bounds[ob_idx]['low']}) of OB candle {ob_idx} after reversal candle {reversal_idx}, marked with green circle (radius=7) at x={oi_x}, y={oi_y} below candle"
+                                            else:
+                                                draw_right_arrow(img, ob_x, ob_y)
+                                                ob_candle = next((c for c in candle_data if int(c["candle_number"]) == ob_idx), None)
+                                                ob_timestamp = ob_candle["time"] if ob_candle else datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00')
+                                                ob_none_oi_data.append({
+                                                    f"team{team_counter}": {
+                                                        "timestamp": ob_timestamp,
+                                                        "team_type": "PL-to-PL",
+                                                        "none_oi_x_OB_high_price": candle_bounds[ob_idx]["high"],
+                                                        "none_oi_x_OB_low_price": candle_bounds[ob_idx]["low"]
+                                                    }
+                                                })
+                                                team_counter += 1
+                                                reason += f"; for PL intersector at candle {selected_idx}, found OB candle {ob_idx} with low lower than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}, marked with green right arrow at x={ob_x}, y={ob_y} extended to right edge of image"
+                                                reason += f"; for PL team at candle {selected_idx}, no 'oi' candle found with high higher than low ({candle_bounds[ob_idx]['low']}) of OB candle {ob_idx} after reversal candle {reversal_idx if reversal_result else 'None'}"
+                                        else:
+                                            reason += f"; for PL intersector at candle {selected_idx}, no OB candle found with low lower than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {selected_idx + max(1, startOBsearchFrom)} to receiver {best_receiver_idx}"
+                                        reversal_result = find_reversal_candle(target_idx, is_ph=False)
+                                        if reversal_result:
+                                            reversal_idx, reversal_x, reversal_y = reversal_result
+                                            draw_chevron_arrow(img, reversal_x, reversal_y, 'up', color=(0, 0, 255))
+                                            reason += f"; for PL team at candle {selected_idx}, found reversal candle {reversal_idx} with low ({candle_bounds[reversal_idx]['low']}) lower than {reversal_leftcandle} left and {reversal_rightcandle} right neighbors after target candle {target_idx}, marked with red upward chevron arrow at x={reversal_x}, y={reversal_y} below candle"
+                                        else:
+                                            reason += f"; for PL team at candle {selected_idx}, no reversal candle found with low lower than {reversal_leftcandle} left and {reversal_rightcandle} right neighbors after target candle {target_idx}"
                                         break
                     else:
                         reason = f"No PL-to-PL trendline drawn from sender (candle {sender_idx}, low {sender_low}, x={sender_x}, y={sender_y}) as first intersector is trendbreaker" + reason
@@ -1182,20 +1444,26 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
                 })
                 i += 1
 
-        # Save the image
         cv2.imwrite(output_image_path, img)
         log_and_print(
             f"Chart with colored contours (dim green for up, red for down), "
             f"PH/PL markers (blue for PH, purple for PL), "
             f"single trendlines (blue for PH-to-PH to lowest high intersector or receiver extended to first breakout candle, yellow for PL-to-PL to highest low intersector or receiver extended to first breakout candle), "
             f"intersector markers (blue star/circle for PH selected intersector, yellow star/circle for PL selected intersector), "
-            f"blue upward chevron arrow on first PH breakout candle after skipping {minbreakoutcandleposition} candles from initial breakout with higher low and higher high for last PH trendline at center x-axis with offset, "
-            f"purple downward chevron arrow on first PL breakout candle after skipping {minbreakoutcandleposition} candles from initial breakout with lower high and lower low for last PL trendline at center x-axis with offset), "
+            f"blue upward chevron arrow on first PH breakout candle after skipping {minbreakoutcandleposition} candles from initial breakout with higher low and higher high for last PH trendline at center x-axis with offset from high, "
+            f"purple downward chevron arrow on first PL breakout candle after skipping {minbreakoutcandleposition} candles from initial breakout with lower high and lower low for last PL trendline at center x-axis with offset from low, "
+            f"red right arrow for PH intersector on first candle with high higher than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {startOBsearchFrom} behind intersector to receiver at high price, extended to 'oi' candle body if found, "
+            f"green right arrow for PH intersector on first candle with high higher than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {startOBsearchFrom} behind intersector to receiver at high price, extended to right edge of image if no 'oi' found, "
+            f"red right arrow for PL intersector on first candle with low lower than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {startOBsearchFrom} behind intersector to receiver at low price, extended to 'oi' candle body if found, "
+            f"green right arrow for PL intersector on first candle with low lower than {minOBleftneighbor} left and {minOBrightneighbor} right neighbors from candle {startOBsearchFrom} behind intersector to receiver at low price, extended to right edge of image if no 'oi' found, "
+            f"green circle (radius=7) for PH team 'oi' candle with low lower than high of OB candle, placed below candle, "
+            f"green circle (radius=7) for PL team 'oi' candle with high higher than low of OB candle, placed below candle, "
+            f"dim green downward chevron arrow for PH team reversal candle with high higher than {reversal_leftcandle} left and {reversal_rightcandle} right neighbors, placed above candle, "
+            f"red upward chevron arrow for PL team reversal candle with low lower than {reversal_leftcandle} left and {reversal_rightcandle} right neighbors, placed below candle, "
             f"saved for {symbol} ({timeframe_str}) at {output_image_path}",
             "SUCCESS"
         )
 
-        # Save contour data and trendline log
         contour_data = {
             "total_count": total_count,
             "green_candle_count": green_count,
@@ -1237,19 +1505,15 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
             })
             save_errors(error_log)
             log_and_print(f"Failed to save contour count for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
+
         try:
-            trendline_log.insert(0, {
-                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
-                "symbol": symbol,
-                "timeframe": timeframe_str,
-                "team_type": "initial",
-                "status": "info",
-                "reason": f"Found {len(ph_indices)} PH points and {len(pl_indices)} PL points",
-                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
-            })
             with open(trendline_log_json_path, 'w') as f:
                 json.dump(trendline_log, f, indent=4)
-            log_and_print(f"Trendline log saved for {symbol} ({timeframe_str}) at {trendline_log_json_path}", "SUCCESS")
+            log_and_print(
+                f"Trendline log saved for {symbol} ({timeframe_str}) at {trendline_log_json_path} "
+                f"with {len(trendline_log)} entries",
+                "SUCCESS"
+            )
         except Exception as e:
             error_log.append({
                 "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
@@ -1258,25 +1522,234 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
             })
             save_errors(error_log)
             log_and_print(f"Failed to save trendline log for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
-        log_and_print(
-            f"Detected {total_count} candle contours for {symbol} ({timeframe_str}) (green={green_count}, red={red_count}), "
-            f"counted from newest to oldest, with {len(ph_indices)} PH and {len(pl_indices)} PL marked, "
-            f"{len(ph_teams)} PH-to-PH teams, {len(pl_teams)} PL-to-PL teams, "
-            f"{len(ph_additional_trendlines)} PH-to-PH trendlines (extended to first breakout candle), "
-            f"{len(pl_additional_trendlines)} PL-to-PL trendlines (extended to first breakout candle)",
-            "INFO"
-        )
+
+        try:
+            with open(ob_none_oi_json_path, 'w') as f:
+                json.dump(ob_none_oi_data, f, indent=4)
+            log_and_print(
+                f"OB none oi_x data saved for {symbol} ({timeframe_str}) at {ob_none_oi_json_path} "
+                f"with {len(ob_none_oi_data)} entries",
+                "SUCCESS"
+            )
+        except Exception as e:
+            error_log.append({
+                                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to save OB none oi_x data for {symbol} ({timeframe_str}): {str(e)}",
+                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+            })
+            save_errors(error_log)
+            log_and_print(f"Failed to save OB none oi_x data for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
+
+        return error_log
+
     except Exception as e:
         error_log.append({
             "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
-            "error": f"Failed to detect contours or draw trendlines for {symbol} ({timeframe_str}) in chart.png: {str(e)}",
+            "error": f"Unexpected error in detect_candle_contours for {symbol} ({timeframe_str}): {str(e)}",
             "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
         })
         save_errors(error_log)
-        log_and_print(f"Failed to detect contours or draw trendlines for {symbol} ({timeframe_str}) in chart.png: {str(e)}", "ERROR")
-    return error_log
-
+        log_and_print(f"Unexpected error in detect_candle_contours for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
+        return error_log
+def collect_ob_none_oi_data(symbol, symbol_folder, broker_name, base_folder, all_symbols):
+    """Collect and convert ob_none_oi_data.json from each timeframe for a symbol, save to market folder as alltimeframes_ob_none_oi_data.json, and update allmarkets_limitorders.json in the broker's base folder, filtering out invalid limit orders based on current bid price."""
+    error_log = []
+    all_timeframes_data = {tf: [] for tf in TIMEFRAME_MAP.keys()}
+    allmarkets_json_path = os.path.join(base_folder, "allmarkets_limitorders.json")
     
+    # Initialize or load existing allmarkets_limitorders.json
+    if os.path.exists(allmarkets_json_path):
+        try:
+            with open(allmarkets_json_path, 'r') as f:
+                allmarkets_data = json.load(f)
+            markets_limitorders_count = allmarkets_data.get("markets_limitorders", 0)
+            markets_nolimitorders_count = allmarkets_data.get("markets_nolimitorders", 0)
+            limitorders = allmarkets_data.get("limitorders", {})
+        except Exception as e:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to load {allmarkets_json_path} for {broker_name}: {str(e)}",
+                "broker": broker_name
+            })
+            log_and_print(f"Failed to load {allmarkets_json_path} for {broker_name}: {str(e)}", "ERROR")
+            markets_limitorders_count = 0
+            markets_nolimitorders_count = 0
+            limitorders = {}
+    else:
+        markets_limitorders_count = 0
+        markets_nolimitorders_count = 0
+        limitorders = {}
+
+    # Process the current symbol's timeframes
+    symbol_limitorders = {tf: [] for tf in TIMEFRAME_MAP.keys()}
+    has_limit_orders = False
+
+    # Get current bid price for the symbol
+    current_bid_price = None
+    try:
+        # Ensure MT5 is initialized for the broker
+        config = brokersdictionary.get(broker_name)
+        if not config:
+            raise Exception(f"No configuration found for broker {broker_name}")
+        success, init_errors = initialize_mt5(
+            config["TERMINAL_PATH"],
+            config["LOGIN_ID"],
+            config["PASSWORD"],
+            config["SERVER"]
+        )
+        error_log.extend(init_errors)
+        if not success:
+            raise Exception(f"MT5 initialization failed for {broker_name}")
+        
+        # Fetch current bid price
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            raise Exception(f"Failed to retrieve tick data for {symbol}")
+        current_bid_price = tick.bid
+        log_and_print(f"Retrieved current bid price {current_bid_price} for {symbol} ({broker_name})", "INFO")
+        
+        # Shutdown MT5 after fetching bid price
+        mt5.shutdown()
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to retrieve current bid price for {symbol} ({broker_name}): {str(e)}",
+            "broker": broker_name
+        })
+        log_and_print(f"Failed to retrieve current bid price for {symbol} ({broker_name}): {str(e)}", "ERROR")
+        # Continue processing even if bid price retrieval fails, but no orders will be recorded
+        current_bid_price = None
+
+    try:
+        for timeframe_str in TIMEFRAME_MAP.keys():
+            timeframe_folder = os.path.join(symbol_folder, timeframe_str)
+            ob_none_oi_json_path = os.path.join(timeframe_folder, "ob_none_oi_data.json")
+            
+            if os.path.exists(ob_none_oi_json_path):
+                try:
+                    with open(ob_none_oi_json_path, 'r') as f:
+                        data = json.load(f)
+                        converted_data = []
+                        for item in data:
+                            for team_key, team_data in item.items():
+                                converted_team = {
+                                    "timestamp": team_data["timestamp"]
+                                }
+                                if team_data["team_type"] == "PH-to-PH":
+                                    converted_team["limit_order"] = "buy_limit"
+                                    converted_team["entry_price"] = team_data["none_oi_x_OB_high_price"]
+                                elif team_data["team_type"] == "PL-to-PL":
+                                    converted_team["limit_order"] = "sell_limit"
+                                    converted_team["entry_price"] = team_data["none_oi_x_OB_low_price"]
+                                else:
+                                    error_log.append({
+                                        "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                                        "error": f"Unknown team_type '{team_data['team_type']}' in ob_none_oi_data for {symbol} ({timeframe_str})",
+                                        "broker": broker_name
+                                    })
+                                    log_and_print(f"Unknown team_type '{team_data['team_type']}' in ob_none_oi_data for {symbol} ({timeframe_str})", "ERROR")
+                                    continue
+                                
+                                # Filter based on current bid price
+                                if current_bid_price is not None:
+                                    if converted_team["limit_order"] == "sell_limit" and current_bid_price >= converted_team["entry_price"]:
+                                        log_and_print(
+                                            f"Skipped sell limit order for {symbol} ({timeframe_str}) at entry_price {converted_team['entry_price']} "
+                                            f"as current bid price {current_bid_price} is >= entry price",
+                                            "INFO"
+                                        )
+                                        continue
+                                    if converted_team["limit_order"] == "buy_limit" and current_bid_price < converted_team["entry_price"]:
+                                        log_and_print(
+                                            f"Skipped buy limit order for {symbol} ({timeframe_str}) at entry_price {converted_team['entry_price']} "
+                                            f"as current bid price {current_bid_price} is < entry price",
+                                            "INFO"
+                                        )
+                                        continue
+                                
+                                converted_data.append({team_key: converted_team})
+                        
+                        all_timeframes_data[timeframe_str] = converted_data
+                        if converted_data:
+                            symbol_limitorders[timeframe_str] = converted_data
+                            has_limit_orders = True
+                    log_and_print(f"Collected and converted ob_none_oi_data for {symbol} ({timeframe_str}) from {ob_none_oi_json_path}", "INFO")
+                except Exception as e:
+                    error_log.append({
+                        "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                        "error": f"Failed to read ob_none_oi_data.json for {symbol} ({timeframe_str}): {str(e)}",
+                        "broker": broker_name
+                    })
+                    log_and_print(f"Failed to read ob_none_oi_data.json for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
+            else:
+                error_log.append({
+                    "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                    "error": f"ob_none_oi_data.json not found for {symbol} ({timeframe_str}) at {ob_none_oi_json_path}",
+                    "broker": broker_name
+                })
+                log_and_print(f"ob_none_oi_data.json not found for {symbol} ({timeframe_str})", "WARNING")
+
+        # Save alltimeframes_ob_none_oi_data.json for the current symbol
+        output_json_path = os.path.join(symbol_folder, "alltimeframes_ob_none_oi_data.json")
+        output_data = {
+            "market": symbol,
+            **all_timeframes_data
+        }
+        try:
+            with open(output_json_path, 'w') as f:
+                json.dump(output_data, f, indent=4)
+            log_and_print(f"Saved all timeframes ob_none_oi_data for {symbol} to {output_json_path}", "SUCCESS")
+        except Exception as e:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to save alltimeframes_ob_none_oi_data.json for {symbol}: {str(e)}",
+                "broker": broker_name
+            })
+            log_and_print(f"Failed to save alltimeframes_ob_none_oi_data.json for {symbol}: {str(e)}", "ERROR")
+
+        # Update counts and limitorders structure for allmarkets_limitorders.json
+        if has_limit_orders:
+            markets_limitorders_count += 1
+            limitorders[symbol] = symbol_limitorders
+        else:
+            markets_nolimitorders_count += 1
+
+        # Save updated allmarkets_limitorders.json
+        allmarkets_output_data = {
+            "markets_limitorders": markets_limitorders_count,
+            "markets_nolimitorders": markets_nolimitorders_count,
+            "limitorders": limitorders
+        }
+        try:
+            with open(allmarkets_json_path, 'w') as f:
+                json.dump(allmarkets_output_data, f, indent=4)
+            log_and_print(
+                f"Updated allmarkets_limitorders.json for {broker_name} at {allmarkets_json_path} "
+                f"after processing {symbol} (markets_limitorders={markets_limitorders_count}, "
+                f"markets_nolimitorders={markets_nolimitorders_count})",
+                "SUCCESS"
+            )
+        except Exception as e:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to save allmarkets_limitorders.json for {broker_name}: {str(e)}",
+                "broker": broker_name
+            })
+            log_and_print(f"Failed to save allmarkets_limitorders.json for {broker_name}: {str(e)}", "ERROR")
+
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Unexpected error in collect_ob_none_oi_data for {symbol} ({broker_name}): {str(e)}",
+            "broker": broker_name
+        })
+        log_and_print(f"Unexpected error in collect_ob_none_oi_data for {symbol} ({broker_name}): {str(e)}", "ERROR")
+
+    if error_log:
+        save_errors(error_log)
+    return error_log 
+    
+
 def crop_chart(chart_path, symbol, timeframe_str, timeframe_folder):
     """Crop the saved chart.png and chartanalysed.png images, then detect candle contours only for chart.png."""
     error_log = []
@@ -1330,7 +1803,7 @@ def fetch_charts_all_brokers(
     neighborcandles_left,
     neighborcandles_right
 ):
-    """Main function to fetch OHLCV data, save charts, crop them, apply arrow detection, and save candle details."""
+    """Main function to fetch OHLCV data, save charts, crop them, apply arrow detection, save candle details, and collect ob_none_oi_data."""
     error_log = []
     log_and_print("Starting chart generation process for all brokers with their respective symbols", "INFO")
 
@@ -1432,6 +1905,10 @@ def fetch_charts_all_brokers(
                     error_log.extend(crop_errors)
                 log_and_print("", "INFO")
 
+            # Collect ob_none_oi_data for all timeframes of the current symbol
+            collect_errors = collect_ob_none_oi_data(symbol, symbol_folder, broker_name, config["BASE_FOLDER"], broker_symbols[broker_name])
+            error_log.extend(collect_errors)
+
             mt5.shutdown()
             log_and_print("", "INFO")
             broker_indices[broker_name] += 1
@@ -1441,8 +1918,8 @@ def fetch_charts_all_brokers(
                 remaining_symbols[broker_name] = []
 
     save_errors(error_log)
-    log_and_print("Chart generation process completed for all brokers with their respective symbols", "SUCCESS")
-    return len(error_log) == 0
+    log_and_print("Chart generation, cropping, arrow detection, PH/PL analysis, candle data saving, and allmarkets_limitorders collection completed for all brokers!", "SUCCESS")
+    return len(error_log) == 0  
 
 if __name__ == "__main__":
     success = fetch_charts_all_brokers(
