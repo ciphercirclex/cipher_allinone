@@ -20,42 +20,6 @@ brokersdictionary = {
         "ACCOUNT": "demo",
         "STRATEGY": "allorder",
         "BASE_FOLDER": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\deriv\derivsymbols"
-    },
-    "deriv1": {
-        "TERMINAL_PATH": r"c:\xampp\htdocs\CIPHER\metaTrader5\cipher i\MetaTrader 5 deriv 1\terminal64.exe",
-        "LOGIN_ID": "140357859",
-        "PASSWORD": "@Ayomide12#",
-        "SERVER": "DerivSVG-Server-03",
-        "ACCOUNT": "real",
-        "STRATEGY": "lowtohigh",
-        "BASE_FOLDER": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\deriv 1\derivsymbols"
-    },
-    "deriv2": {
-        "TERMINAL_PATH": r"c:\xampp\htdocs\CIPHER\metaTrader5\cipher i\MetaTrader 5 deriv 1\terminal64.exe",
-        "LOGIN_ID": "140357853",
-        "PASSWORD": "@Ayomide12#",
-        "SERVER": "DerivSVG-Server-03",
-        "ACCOUNT": "real",
-        "STRATEGY": "hightolow",
-        "BASE_FOLDER": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\deriv 2\derivsymbols"
-    },
-    "bybit1": {
-        "TERMINAL_PATH": r"c:\xampp\htdocs\CIPHER\metaTrader5\cipher i\MetaTrader 5 bybit 1\terminal64.exe",
-        "LOGIN_ID": "4836528",
-        "PASSWORD": "@Techknowdge12#",
-        "SERVER": "Bybit-Live",
-        "ACCOUNT": "real",
-        "STRATEGY": "hightolow",
-        "BASE_FOLDER": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\bybit 1\bybitsymbols"
-    },
-    "exness1": {
-        "TERMINAL_PATH": r"c:\xampp\htdocs\CIPHER\metaTrader5\cipher i\MetaTrader 5 exness 1\terminal64.exe",
-        "LOGIN_ID": "63937917",
-        "PASSWORD": "T1aiwoThrone2",
-        "SERVER": "Exness-MT5Real9",
-        "ACCOUNT": "real",
-        "STRATEGY": "hightolow",
-        "BASE_FOLDER": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\exness 1\exness_symbols"
     }
 }
 
@@ -1551,12 +1515,32 @@ def detect_candle_contours(chart_path, symbol, timeframe_str, timeframe_folder, 
         save_errors(error_log)
         log_and_print(f"Unexpected error in detect_candle_contours for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
         return error_log
+
 def collect_ob_none_oi_data(symbol, symbol_folder, broker_name, base_folder, all_symbols):
-    """Collect and convert ob_none_oi_data.json from each timeframe for a symbol, save to market folder as alltimeframes_ob_none_oi_data.json, and update allmarkets_limitorders.json in the broker's base folder, filtering out invalid limit orders based on current bid price."""
+    """Collect and convert ob_none_oi_data.json from each timeframe for a symbol, save to market folder as alltimeframes_ob_none_oi_data.json,
+    update allmarkets_limitorders.json, allnoordermarkets.json, and save to market-type-specific JSONs based on allsymbolsvolumesandrisk.json."""
+    
     error_log = []
     all_timeframes_data = {tf: [] for tf in TIMEFRAME_MAP.keys()}
     allmarkets_json_path = os.path.join(base_folder, "allmarkets_limitorders.json")
-    
+    allnoordermarkets_json_path = os.path.join(base_folder, "allnoordermarkets.json")
+    allsymbols_json_path = r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\allsymbolsvolumesandrisk.json"
+
+    # Paths for market-type-specific JSONs
+    market_type_paths = {
+        "forex": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\forexvolumesandrisk.json",
+        "stocks": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\stocksvolumesandrisk.json",
+        "indices": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\indicesvolumesandrisk.json",
+        "synthetics": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\syntheticsvolumesandrisk.json",
+        "commodities": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\commoditiesvolumesandrisk.json",
+        "crypto": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\cryptovolumesandrisk.json",
+        "equities": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\equitiesvolumesandrisk.json",
+        "energies": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\energiesvolumesandrisk.json",
+        "etfs": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\etfsvolumesandrisk.json",
+        "basket_indices": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\basketindicesvolumesandrisk.json",
+        "metals": r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\metalsvolumesandrisk.json"
+    }
+
     # Initialize or load existing allmarkets_limitorders.json
     if os.path.exists(allmarkets_json_path):
         try:
@@ -1580,14 +1564,64 @@ def collect_ob_none_oi_data(symbol, symbol_folder, broker_name, base_folder, all
         markets_nolimitorders_count = 0
         limitorders = {}
 
+    # Initialize or load existing allnoordermarkets.json
+    if os.path.exists(allnoordermarkets_json_path):
+        try:
+            with open(allnoordermarkets_json_path, 'r') as f:
+                allnoordermarkets_data = json.load(f)
+            noorder_markets = allnoordermarkets_data.get("noorder_markets", [])
+        except Exception as e:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to load {allnoordermarkets_json_path} for {broker_name}: {str(e)}",
+                "broker": broker_name
+            })
+            log_and_print(f"Failed to load {allnoordermarkets_json_path} for {broker_name}: {str(e)}", "ERROR")
+            noorder_markets = []
+    else:
+        noorder_markets = []
+
+    # Load allsymbolsvolumesandrisk.json to get market type, volume, and risk
+    market_type = None
+    volume_data = {}
+    try:
+        with open(allsymbols_json_path, 'r') as f:
+            allsymbols_data = json.load(f)
+        for risk_key, markets in allsymbols_data.items():
+            risk_amount = float(risk_key.split(": ")[1])
+            for mkt_type in market_type_paths.keys():
+                for item in markets.get(mkt_type, []):
+                    if item["symbol"] == symbol:
+                        market_type = mkt_type
+                        volume_data[risk_amount] = item["volume"]
+                        break
+                if market_type:
+                    break
+        if not market_type:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Symbol {symbol} not found in {allsymbols_json_path} or no valid market type",
+                "broker": broker_name
+            })
+            log_and_print(f"Symbol {symbol} not found in {allsymbols_json_path} or no valid market type", "ERROR")
+        else:
+            log_and_print(f"Symbol {symbol} identified as market type: {market_type}", "INFO")
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to load {allsymbols_json_path}: {str(e)}",
+            "broker": broker_name
+        })
+        log_and_print(f"Failed to load {allsymbols_json_path}: {str(e)}", "ERROR")
+
     # Process the current symbol's timeframes
     symbol_limitorders = {tf: [] for tf in TIMEFRAME_MAP.keys()}
     has_limit_orders = False
+    market_type_orders = []
 
     # Get current bid price for the symbol
     current_bid_price = None
     try:
-        # Ensure MT5 is initialized for the broker
         config = brokersdictionary.get(broker_name)
         if not config:
             raise Exception(f"No configuration found for broker {broker_name}")
@@ -1601,14 +1635,12 @@ def collect_ob_none_oi_data(symbol, symbol_folder, broker_name, base_folder, all
         if not success:
             raise Exception(f"MT5 initialization failed for {broker_name}")
         
-        # Fetch current bid price
         tick = mt5.symbol_info_tick(symbol)
         if tick is None:
             raise Exception(f"Failed to retrieve tick data for {symbol}")
         current_bid_price = tick.bid
         log_and_print(f"Retrieved current bid price {current_bid_price} for {symbol} ({broker_name})", "INFO")
         
-        # Shutdown MT5 after fetching bid price
         mt5.shutdown()
     except Exception as e:
         error_log.append({
@@ -1617,7 +1649,6 @@ def collect_ob_none_oi_data(symbol, symbol_folder, broker_name, base_folder, all
             "broker": broker_name
         })
         log_and_print(f"Failed to retrieve current bid price for {symbol} ({broker_name}): {str(e)}", "ERROR")
-        # Continue processing even if bid price retrieval fails, but no orders will be recorded
         current_bid_price = None
 
     try:
@@ -1633,7 +1664,9 @@ def collect_ob_none_oi_data(symbol, symbol_folder, broker_name, base_folder, all
                         for item in data:
                             for team_key, team_data in item.items():
                                 converted_team = {
-                                    "timestamp": team_data["timestamp"]
+                                    "timestamp": team_data["timestamp"],
+                                    "limit_order": "",
+                                    "entry_price": 0.0
                                 }
                                 if team_data["team_type"] == "PH-to-PH":
                                     converted_team["limit_order"] = "buy_limit"
@@ -1659,15 +1692,26 @@ def collect_ob_none_oi_data(symbol, symbol_folder, broker_name, base_folder, all
                                             "INFO"
                                         )
                                         continue
-                                    if converted_team["limit_order"] == "buy_limit" and current_bid_price < converted_team["entry_price"]:
+                                    if converted_team["limit_order"] == "buy_limit" and current_bid_price <= converted_team["entry_price"]:
                                         log_and_print(
                                             f"Skipped buy limit order for {symbol} ({timeframe_str}) at entry_price {converted_team['entry_price']} "
-                                            f"as current bid price {current_bid_price} is < entry price",
+                                            f"as current bid price {current_bid_price} is <= entry price",
                                             "INFO"
                                         )
                                         continue
                                 
-                                converted_data.append({team_key: converted_team})
+                                converted_data.append({"team1": converted_team})
+                                if market_type and volume_data:
+                                    # Add to market-type-specific data with volume and riskusd_amount
+                                    for risk_amount, volume in volume_data.items():
+                                        market_type_orders.append({
+                                            "market": symbol,
+                                            "limit_order": converted_team["limit_order"],
+                                            "timeframe": timeframe_str,
+                                            "entry_price": converted_team["entry_price"],
+                                            "volume": volume,
+                                            "riskusd_amount": risk_amount
+                                        })
                         
                         all_timeframes_data[timeframe_str] = converted_data
                         if converted_data:
@@ -1711,8 +1755,12 @@ def collect_ob_none_oi_data(symbol, symbol_folder, broker_name, base_folder, all
         if has_limit_orders:
             markets_limitorders_count += 1
             limitorders[symbol] = symbol_limitorders
+            if symbol in noorder_markets:
+                noorder_markets.remove(symbol)
         else:
             markets_nolimitorders_count += 1
+            if symbol not in noorder_markets:
+                noorder_markets.append(symbol)
 
         # Save updated allmarkets_limitorders.json
         allmarkets_output_data = {
@@ -1737,6 +1785,109 @@ def collect_ob_none_oi_data(symbol, symbol_folder, broker_name, base_folder, all
             })
             log_and_print(f"Failed to save allmarkets_limitorders.json for {broker_name}: {str(e)}", "ERROR")
 
+        # Save updated allnoordermarkets.json
+        allnoordermarkets_output_data = {
+            "markets_nolimitorders": markets_nolimitorders_count,
+            "noorder_markets": noorder_markets
+        }
+        try:
+            with open(allnoordermarkets_json_path, 'w') as f:
+                json.dump(allnoordermarkets_output_data, f, indent=4)
+            log_and_print(
+                f"Updated allnoordermarkets.json for {broker_name} at {allnoordermarkets_json_path} "
+                f"after processing {symbol} (markets_nolimitorders={markets_nolimitorders_count}, "
+                f"noorder_markets={len(noorder_markets)})",
+                "SUCCESS"
+            )
+        except Exception as e:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to save allnoordermarkets.json for {broker_name}: {str(e)}",
+                "broker": broker_name
+            })
+            log_and_print(f"Failed to save allnoordermarkets.json for {broker_name}: {str(e)}", "ERROR")
+
+        # Save to market-type-specific JSON
+        if market_type and market_type_orders:
+            market_json_path = market_type_paths.get(market_type)
+            if market_json_path:
+                try:
+                    # Load existing data if file exists
+                    existing_data = {}
+                    if os.path.exists(market_json_path):
+                        with open(market_json_path, 'r') as f:
+                            existing_data = json.load(f)
+
+                    if market_type == "forex":
+                        # Initialize forex structure if not present
+                        if not existing_data:
+                            existing_data = {
+                                "xxxchf": [],
+                                "xxxjpy": [],
+                                "xxxnzd": [],
+                                "xxxusd": [],
+                                "usdxxx": [],
+                                "xxxaud": [],
+                                "xxxcad": [],  # Added xxxcad group
+                                "other": []
+                            }
+
+                        # Determine currency pair group
+                        symbol_lower = symbol.lower()
+                        if symbol_lower.endswith('chf'):
+                            group = "xxxchf"
+                        elif symbol_lower.endswith('jpy'):
+                            group = "xxxjpy"
+                        elif symbol_lower.endswith('nzd'):
+                            group = "xxxnzd"
+                        elif symbol_lower.endswith('usd'):
+                            group = "xxxusd"
+                        elif symbol_lower.startswith('usd'):
+                            group = "usdxxx"
+                        elif symbol_lower.endswith('aud'):
+                            group = "xxxaud"
+                        elif symbol_lower.endswith('cad'):
+                            group = "xxxcad"  # Added condition for xxxcad
+                        else:
+                            group = "other"
+
+                        # Append orders to the appropriate group
+                        existing_data[group].extend(market_type_orders)
+                    else:
+                        # For non-forex market types, maintain the original flat structure
+                        existing_data = existing_data if isinstance(existing_data, list) else []
+                        existing_data.extend(market_type_orders)
+
+                    # Save updated data
+                    with open(market_json_path, 'w') as f:
+                        json.dump(existing_data, f, indent=4)
+                    log_and_print(
+                        f"Saved {len(market_type_orders)} orders for {symbol} to {market_json_path} "
+                        f"(market type: {market_type})",
+                        "SUCCESS"
+                    )
+                except Exception as e:
+                    error_log.append({
+                        "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                        "error": f"Failed to save {market_json_path} for {symbol} ({market_type}): {str(e)}",
+                        "broker": broker_name
+                    })
+                    log_and_print(f"Failed to save {market_json_path} for {symbol} ({market_type}): {str(e)}", "ERROR")
+            else:
+                error_log.append({
+                    "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                    "error": f"No JSON path defined for market type {market_type} for {symbol}",
+                    "broker": broker_name
+                })
+                log_and_print(f"No JSON path defined for market type {market_type} for {symbol}", "ERROR")
+        else:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"No market type or no orders for {symbol} (market_type: {market_type}, orders: {len(market_type_orders)})",
+                "broker": broker_name
+            })
+            log_and_print(f"No market type or no orders for {symbol} (market_type: {market_type}, orders: {len(market_type_orders)})", "WARNING")
+
     except Exception as e:
         error_log.append({
             "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
@@ -1749,7 +1900,6 @@ def collect_ob_none_oi_data(symbol, symbol_folder, broker_name, base_folder, all
         save_errors(error_log)
     return error_log 
     
-
 def crop_chart(chart_path, symbol, timeframe_str, timeframe_folder):
     """Crop the saved chart.png and chartanalysed.png images, then detect candle contours only for chart.png."""
     error_log = []
@@ -1803,21 +1953,64 @@ def fetch_charts_all_brokers(
     neighborcandles_left,
     neighborcandles_right
 ):
-    """Main function to fetch OHLCV data, save charts, crop them, apply arrow detection, save candle details, and collect ob_none_oi_data."""
+    """Main function to fetch OHLCV data, save charts, crop them, apply arrow detection, save candle details, and collect ob_none_oi_data for symbols in symbolsmatch.json, processing one symbol per market category per broker in a round-robin fashion until all symbols are exhausted."""
     error_log = []
-    log_and_print("Starting chart generation process for all brokers with their respective symbols", "INFO")
+    log_and_print("Starting chart generation process for all brokers with symbols from symbolsmatch.json, processing one symbol per market category per round until all symbols are exhausted", "INFO")
 
-    # Clear chart folders for all brokers
-    for broker_name, config in brokersdictionary.items():
-        log_and_print(f"Clearing chart folder for broker: {broker_name}", "INFO")
-        success_clear, clear_errors = clear_chart_folder(config["BASE_FOLDER"])
-        error_log.extend(clear_errors)
-        if not success_clear:
-            log_and_print(f"Failed to clear chart folder for {broker_name}, continuing", "ERROR")
+    # Load symbolsmatch.json
+    symbolsmatch_path = r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\symbolsmatch.json"
+    try:
+        with open(symbolsmatch_path, 'r') as f:
+            symbolsmatch_data = json.load(f)
+        log_and_print(f"Loaded symbolsmatch.json from {symbolsmatch_path}", "INFO")
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to load symbolsmatch.json: {str(e)}",
+            "broker": "none"
+        })
+        save_errors(error_log)
+        log_and_print(f"Failed to load symbolsmatch.json: {str(e)}", "ERROR")
+        return False
 
-    # Get symbols for each broker
-    broker_symbols = {}
+    # Load allsymbolsvolumesandrisk.json to map symbols to market categories
+    allsymbols_json_path = r"C:\xampp\htdocs\CIPHER\cipher i\chart\cipher i\symbols_volumes_points\allsymbolsvolumesandrisk.json"
+    symbol_to_category = {}
+    try:
+        with open(allsymbols_json_path, 'r') as f:
+            allsymbols_data = json.load(f)
+        for risk_key, markets in allsymbols_data.items():
+            for mkt_type in ["stocks", "indices", "commodities", "synthetics", "forex", "crypto", "equities", "energies", "etfs", "basket_indices", "metals"]:
+                for item in markets.get(mkt_type, []):
+                    symbol_to_category[item["symbol"]] = mkt_type
+        log_and_print(f"Loaded symbol-to-category mapping from {allsymbols_json_path} with {len(symbol_to_category)} symbols", "INFO")
+    except Exception as e:
+        error_log.append({
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
+            "error": f"Failed to load {allsymbols_json_path}: {str(e)}",
+            "broker": "none"
+        })
+        save_errors(error_log)
+        log_and_print(f"Failed to load {allsymbols_json_path}: {str(e)}", "ERROR")
+        return False
+
+    # Create a mapping for broker names (remove digits)
+    broker_name_mapping = {
+        "deriv": "deriv",
+        "deriv1": "deriv",
+        "deriv2": "deriv",
+        "bybit1": "bybit",
+        "exness1": "exness"
+    }
+
+    # Get symbols for each broker from symbolsmatch.json and group by market category
+    broker_category_symbols = {}
+    all_categories = ["stocks", "forex", "crypto", "synthetics", "indices", "commodities", "equities", "energies", "etfs", "basket_indices", "metals"]
     for broker_name, config in brokersdictionary.items():
+        mapped_broker = broker_name_mapping.get(broker_name, broker_name)
+        broker_category_symbols[broker_name] = {cat: [] for cat in all_categories}
+        
+        # Initialize MT5 to get available symbols
         log_and_print(f"Initializing MT5 for broker: {broker_name}", "INFO")
         success, init_errors = initialize_mt5(
             config["TERMINAL_PATH"],
@@ -1831,95 +2024,121 @@ def fetch_charts_all_brokers(
             mt5.shutdown()
             continue
 
-        symbols, sym_errors = get_symbols()
+        all_symbols, sym_errors = get_symbols()
         error_log.extend(sym_errors)
-        broker_symbols[broker_name] = sorted(list(symbols))
         mt5.shutdown()
-        log_and_print(f"Retrieved {len(symbols)} symbols for {broker_name}", "INFO")
 
-    if not broker_symbols:
-        log_and_print("No symbols retrieved from any broker, aborting", "ERROR")
+        # Filter symbols and assign to categories
+        for symbol_entry in symbolsmatch_data.get("main_symbols", []):
+            broker_specific_symbols = symbol_entry.get(mapped_broker, [])
+            for symbol in broker_specific_symbols:
+                if symbol in all_symbols:
+                    category = symbol_to_category.get(symbol)
+                    if category and category in all_categories:
+                        if symbol not in broker_category_symbols[broker_name][category]:
+                            broker_category_symbols[broker_name][category].append(symbol)
+        
+        # Log the number of symbols per category
+        for category in all_categories:
+            log_and_print(f"Broker {broker_name} has {len(broker_category_symbols[broker_name][category])} symbols in {category}: {broker_category_symbols[broker_name][category]}", "INFO")
+
+    # Check if any symbols were found
+    if not any(any(symbols) for broker, categories in broker_category_symbols.items() for symbols in categories.values()):
+        log_and_print("No matched symbols found for any broker in symbolsmatch.json, aborting", "ERROR")
         save_errors(error_log)
         return False
 
-    # Initialize remaining symbols for each broker
-    remaining_symbols = {broker: symbols.copy() for broker, symbols in broker_symbols.items()}
-    brokers = list(broker_symbols.keys())
-    broker_indices = {broker: 0 for broker in brokers}
+    # Clear chart folders for all brokers
+    for broker_name, config in brokersdictionary.items():
+        log_and_print(f"Clearing chart folder for broker: {broker_name}", "INFO")
+        success_clear, clear_errors = clear_chart_folder(config["BASE_FOLDER"])
+        error_log.extend(clear_errors)
+        if not success_clear:
+            log_and_print(f"Failed to clear chart folder for {broker_name}, continuing", "ERROR")
 
-    # Process symbols in a round-robin fashion
-    while any(remaining_symbols[broker] for broker in brokers):
-        for broker_name in brokers:
-            if not remaining_symbols[broker_name]:
-                continue
+    # Initialize remaining symbols for each broker and category
+    remaining_symbols = {
+        broker: {cat: symbols.copy() for cat, symbols in categories.items()}
+        for broker, categories in broker_category_symbols.items()
+    }
+    broker_category_indices = {
+        broker: {cat: 0 for cat in all_categories}
+        for broker in broker_category_symbols.keys()
+    }
 
-            log_and_print(f"{broker_name}", "INFO")
-            log_and_print("")
-            log_and_print(f"Processing next symbol for broker: {broker_name}", "INFO")
-            current_index = broker_indices[broker_name]
-            if current_index >= len(remaining_symbols[broker_name]):
-                continue
-            symbol = remaining_symbols[broker_name][current_index]
-
-            config = brokersdictionary[broker_name]
-            success, init_errors = initialize_mt5(
-                config["TERMINAL_PATH"],
-                config["LOGIN_ID"],
-                config["PASSWORD"],
-                config["SERVER"]
-            )
-            error_log.extend(init_errors)
-            if not success:
-                log_and_print(f"MT5 initialization failed for {broker_name} while processing {symbol}, skipping", "ERROR")
-                mt5.shutdown()
-                continue
-
-            log_and_print(f"Processing symbol {symbol} for broker: {broker_name}", "INFO")
-            symbol_folder = os.path.join(config["BASE_FOLDER"], symbol.replace(' ', '_'))
-            os.makedirs(symbol_folder, exist_ok=True)
-
-            for timeframe_str, mt5_timeframe in TIMEFRAME_MAP.items():
-                log_and_print(f"Processing timeframe: {timeframe_str} for {symbol}", "INFO")
-                timeframe_folder = os.path.join(symbol_folder, timeframe_str)
-                os.makedirs(timeframe_folder, exist_ok=True)
-
-                df, data_errors = fetch_ohlcv_data(symbol, mt5_timeframe, bars)
-                error_log.extend(data_errors)
-                if df is None:
+    # Process one symbol from each category across all brokers until all symbols are exhausted
+    round_number = 1
+    while any(any(remaining_symbols[broker][cat] for cat in all_categories) for broker in broker_category_symbols.keys()):
+        log_and_print(f"Starting round {round_number} of symbol processing", "INFO")
+        for category in all_categories:
+            for broker_name in broker_category_symbols.keys():
+                if not remaining_symbols[broker_name][category]:
                     continue
 
-                df['symbol'] = symbol
-                # Generate chart and get PH/PL labels
-                chart_path, chart_errors, ph_labels, pl_labels = generate_and_save_chart(
-                    df, symbol, timeframe_str, timeframe_folder,
-                    neighborcandles_left, neighborcandles_right
+                current_index = broker_category_indices[broker_name][category]
+                if current_index >= len(remaining_symbols[broker_name][category]):
+                    remaining_symbols[broker_name][category] = []  # Mark category as exhausted
+                    continue
+
+                symbol = remaining_symbols[broker_name][category][current_index]
+
+                config = brokersdictionary[broker_name]
+                success, init_errors = initialize_mt5(
+                    config["TERMINAL_PATH"],
+                    config["LOGIN_ID"],
+                    config["PASSWORD"],
+                    config["SERVER"]
                 )
-                error_log.extend(chart_errors)
+                error_log.extend(init_errors)
+                if not success:
+                    log_and_print(f"MT5 initialization failed for {broker_name} while processing {symbol} ({category}), skipping", "ERROR")
+                    mt5.shutdown()
+                    continue
 
-                # Save candle data with PH/PL labels
-                candle_errors = save_candle_data(df, symbol, timeframe_str, timeframe_folder, ph_labels, pl_labels)
-                error_log.extend(candle_errors)
+                log_and_print(f"Processing symbol {symbol} ({category}) for broker: {broker_name} in round {round_number}", "INFO")
+                symbol_folder = os.path.join(config["BASE_FOLDER"], symbol.replace(' ', '_'))
+                os.makedirs(symbol_folder, exist_ok=True)
 
-                if chart_path:
-                    crop_errors = crop_chart(chart_path, symbol, timeframe_str, timeframe_folder)
-                    error_log.extend(crop_errors)
+                for timeframe_str, mt5_timeframe in TIMEFRAME_MAP.items():
+                    log_and_print(f"Processing timeframe: {timeframe_str} for {symbol} ({category})", "INFO")
+                    timeframe_folder = os.path.join(symbol_folder, timeframe_str)
+                    os.makedirs(timeframe_folder, exist_ok=True)
+
+                    df, data_errors = fetch_ohlcv_data(symbol, mt5_timeframe, bars)
+                    error_log.extend(data_errors)
+                    if df is None:
+                        continue
+
+                    df['symbol'] = symbol
+                    # Generate chart and get PH/PL labels
+                    chart_path, chart_errors, ph_labels, pl_labels = generate_and_save_chart(
+                        df, symbol, timeframe_str, timeframe_folder,
+                        neighborcandles_left, neighborcandles_right
+                    )
+                    error_log.extend(chart_errors)
+
+                    # Save candle data with PH/PL labels
+                    candle_errors = save_candle_data(df, symbol, timeframe_str, timeframe_folder, ph_labels, pl_labels)
+                    error_log.extend(candle_errors)
+
+                    if chart_path:
+                        crop_errors = crop_chart(chart_path, symbol, timeframe_str, timeframe_folder)
+                        error_log.extend(crop_errors)
+                    log_and_print("", "INFO")
+
+                # Collect ob_none_oi_data for all timeframes of the current symbol
+                collect_errors = collect_ob_none_oi_data(symbol, symbol_folder, broker_name, config["BASE_FOLDER"], broker_category_symbols[broker_name][category])
+                error_log.extend(collect_errors)
+
+                mt5.shutdown()
                 log_and_print("", "INFO")
+                broker_category_indices[broker_name][category] += 1
 
-            # Collect ob_none_oi_data for all timeframes of the current symbol
-            collect_errors = collect_ob_none_oi_data(symbol, symbol_folder, broker_name, config["BASE_FOLDER"], broker_symbols[broker_name])
-            error_log.extend(collect_errors)
-
-            mt5.shutdown()
-            log_and_print("", "INFO")
-            broker_indices[broker_name] += 1
-            if broker_indices[broker_name] < len(remaining_symbols[broker_name]):
-                remaining_symbols[broker_name][broker_indices[broker_name]]
-            else:
-                remaining_symbols[broker_name] = []
+        round_number += 1
 
     save_errors(error_log)
     log_and_print("Chart generation, cropping, arrow detection, PH/PL analysis, candle data saving, and allmarkets_limitorders collection completed for all brokers!", "SUCCESS")
-    return len(error_log) == 0  
+    return len(error_log) == 0
 
 if __name__ == "__main__":
     success = fetch_charts_all_brokers(
